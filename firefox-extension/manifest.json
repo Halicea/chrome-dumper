@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "HTML Dumper (Firefox)",
+  "version": "0.1.0",
+  "description": "Dumps the live DOM of the active tab to an external program over WebSocket.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "html-dumper@chrome-dumper.local",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": ["activeTab", "scripting", "tabs", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "scripts": ["debugger.js", "background.js"]
+  },
+  "action": {
+    "default_title": "HTML Dumper",
+    "default_popup": "popup.html"
+  }
+}

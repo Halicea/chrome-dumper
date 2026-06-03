@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "HTML Dumper",
+  "version": "0.1.0",
+  "description": "Dumps the live DOM of the active tab to an external program over WebSocket.",
+  "permissions": ["activeTab", "scripting", "tabs", "alarms", "debugger"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "HTML Dumper",
+    "default_popup": "popup.html"
+  }
+}

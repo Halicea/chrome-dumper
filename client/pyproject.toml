@@ -1,0 +1,18 @@
+[project]
+name = "chrome-dumper-client"
+version = "0.1.0"
+description = "CLI + library to drive the HTML Dumper Chrome extension via the bridge server."
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+]
+
+[project.scripts]
+dumper = "chrome_dumper_client.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chrome_dumper_client"]
