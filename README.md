@@ -119,16 +119,32 @@ The extension dials into the bridge. Clients POST JSON commands to the bridge's 
 | `help` | (REPL only) show command list |
 | `quit` / `exit` | (REPL only) leave |
 
-CLI globals: `--base-url` (default `http://127.0.0.1:8766`, or `DUMPER_BASE_URL`), `--out-dir` (default `./dumps`, or `DUMPER_OUT_DIR`).
+CLI globals: `--base-url` (default `http://127.0.0.1:8766`, or `DUMPER_BASE_URL`), `--session <id|name>` (or `DUMPER_SESSION`), `--out-dir` (default `./dumps`, or `DUMPER_OUT_DIR`).
+
+## Sessions (multiple browsers at once)
+
+Each Chrome **profile** that loads the extension is a separate session, so you can drive several browsers from one bridge. A profile is Chrome's isolation boundary, so each session has its own cookies and logins — you sign in once per profile.
+
+- The extension generates a stable id per profile (stored in `chrome.storage.local`) and a human **name** you set in its popup ("work", "test", …).
+- Pick a target with `--session <id|name>` on the CLI, `?session=` / `X-Session` on the HTTP API, or `DumperClient(session=...)`. When only one browser is connected the selector is optional.
+- `dumper sessions` lists what's connected; in the REPL, `use <name>` sets the target for later commands (`use -` clears it).
+
+```bash
+dumper sessions                       # see connected browsers
+dumper --session work open https://intranet.local
+dumper --session test open https://staging.example.com
+```
 
 ## HTTP API
 
 The bridge exposes:
 
-- `GET /health` → `{ "ok": true, "extension_connected": bool }`
-- `POST /cmd` → body is a protocol message (below); query `?timeout=<s>` overrides the default 60s
+- `GET /health` → `{ "ok": true, "extension_connected": bool, "sessions": [ { "id", "name", "connected" } ] }`
+- `GET /sessions` → `{ "sessions": [ { "id", "name", "connected" } ] }`
+- `POST /cmd` → body is a protocol message (below); `?session=<id|name>` picks the browser, `?timeout=<s>` overrides the default 60s
+- `GET /events` → SSE stream of CDP `debug_event`s; `?session=<id|name>` and `?tab=<int>` filter it
 
-Status codes: `503` = extension not connected; `504` = extension didn't respond in time; `400` = bad JSON.
+Status codes: `503` = no extension connected; `504` = extension didn't respond in time; `404` = unknown session selector; `409` = ambiguous (e.g. multiple browsers, no selector given); `400` = bad JSON.
 
 ## Wire protocol (JSON over WS)
 
@@ -204,5 +220,5 @@ Any other language: POST the JSON above to `http://127.0.0.1:8766/cmd`.
 - `chrome://` pages and the Chrome Web Store cannot be scripted or screenshotted (Chrome restriction).
 - `screenshot` without crop captures only the **visible viewport**, not the full page. With `--selector` / `--text` the element is scrolled into view first, but content outside the viewport is still inaccessible. For full-page capture you'd need the `chrome.debugger` API (heavier, shows the automation banner) or scroll-and-stitch.
 - Synthetic `KeyboardEvent`s don't move focus or trigger native browser shortcuts; `key Tab` is special-cased to walk the focusable list itself. Other keys go to the page's JS handlers.
-- Only one extension instance is tracked; if Chrome reconnects, the latest wins.
+- One session is tracked per Chrome profile (keyed by a persistent id); a reconnect rebinds the same session. Multiple profiles = multiple concurrent sessions (see [Sessions](#sessions-multiple-browsers-at-once)).
 - Highlights are positioned in viewport coordinates and do not follow scroll. Re-highlight after scrolling, or use `--duration`.

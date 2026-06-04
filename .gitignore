@@ -27,6 +27,8 @@ htmlcov/
 
 # ---- Browser profiles (local, generated) ----
 .chrome-profile/
+.chrome-profile-*/
+.chrome-stage-*/
 .firefox-profile/
 
 # ---- Runtime / generated data ----

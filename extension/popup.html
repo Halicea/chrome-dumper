@@ -1,12 +1,28 @@
 <!doctype html>
 <html>
 <head><meta charset="utf-8"><style>
-  body { font: 13px system-ui; width: 220px; padding: 10px; }
+  body { font: 13px system-ui; width: 240px; padding: 10px; }
   code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; }
+  label { display: block; margin-top: 10px; font-weight: 600; }
+  input { width: 100%; box-sizing: border-box; padding: 4px 6px; margin-top: 4px; }
+  .row { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  button { padding: 4px 12px; }
+  .muted { color: #666; }
+  #sid { font-size: 11px; margin-top: 8px; word-break: break-all; }
 </style></head>
 <body>
   <div><b>HTML Dumper</b></div>
-  <div>Connects to <code>ws://127.0.0.1:8765</code>.</div>
-  <div>Badge: <code>ON</code> = connected, <code>OFF</code> = not.</div>
+  <div class="muted">Connects to <code>ws://127.0.0.1:8765</code>.</div>
+  <div class="muted">Badge: <code>ON</code> = connected, <code>OFF</code> = not.</div>
+
+  <label for="name">Session name</label>
+  <input id="name" placeholder="e.g. work, test, scratch" autocomplete="off" />
+  <div class="row">
+    <button id="save">Save</button>
+    <span id="status" class="muted"></span>
+  </div>
+  <div class="muted" id="sid"></div>
+
+  <script src="popup.js"></script>
 </body>
 </html>

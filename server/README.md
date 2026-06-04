@@ -2,10 +2,15 @@
 
 Bridge between the HTML Dumper Chrome extension and HTTP clients.
 
-- `ws://127.0.0.1:8765` — the extension dials in here.
+Multiple Chrome profiles can connect at once; each is a named session (see the
+top-level README's "Sessions" section).
+
+- `ws://127.0.0.1:8765` — extensions dial in here (one connection per profile).
 - `http://127.0.0.1:8766` — clients POST JSON commands here:
-  - `GET  /health` → `{ ok, extension_connected }`
-  - `POST /cmd`    → body is a protocol message (see top-level README); returns the extension's reply.
+  - `GET  /health`   → `{ ok, extension_connected, sessions: [...] }`
+  - `GET  /sessions` → `{ sessions: [ { id, name, connected } ] }`
+  - `POST /cmd`      → body is a protocol message (see top-level README); `?session=<id|name>` picks the browser. Returns the extension's reply.
+  - `GET  /events`   → SSE stream of CDP events; `?session=<id|name>` and `?tab=<int>` filter it.
 
 ## Run
 

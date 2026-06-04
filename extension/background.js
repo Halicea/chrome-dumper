@@ -7,12 +7,66 @@ try { importScripts("debugger.js"); } catch (e) { console.error("debugger.js loa
 let ws = null;
 let reconnectTimer = null;
 
+// Per-profile session identity. sessionId is generated once and persisted in
+// chrome.storage.local (which is per-profile), so each Chrome profile is a
+// distinct, stable session on the bridge. The name is a human label the user
+// sets from the popup.
+let sessionId = null;
+let sessionName = "";
+
+async function loadIdentity() {
+  const got = await chrome.storage.local.get(["sessionId", "sessionName"]);
+  sessionId = got.sessionId || crypto.randomUUID();
+  sessionName = got.sessionName || "";
+  if (!got.sessionId) await chrome.storage.local.set({ sessionId });
+  // If the user hasn't named this profile yet, adopt a build-time default from
+  // session.json when present (injected by `make chrome SESSION=<name>`). The
+  // popup always wins once set, so manual renames persist across launches.
+  if (!sessionName) {
+    const seeded = await loadSeedName();
+    if (seeded) {
+      sessionName = seeded;
+      await chrome.storage.local.set({ sessionName: seeded });
+    }
+  }
+  updateTitle();
+}
+
+async function loadSeedName() {
+  try {
+    const res = await fetch(chrome.runtime.getURL("session.json"));
+    if (!res.ok) return "";
+    const data = await res.json();
+    return data && typeof data.name === "string" ? data.name.trim() : "";
+  } catch (_) {
+    return "";  // no seed file packaged — normal for the default profile
+  }
+}
+
+function updateTitle() {
+  chrome.action.setTitle({
+    title: sessionName ? `HTML Dumper — ${sessionName}` : "HTML Dumper",
+  });
+}
+
+function helloMessage() {
+  return JSON.stringify({
+    type: "hello", sessionId, name: sessionName,
+    agent: "html-dumper", version: "0.1.0",
+  });
+}
+
 function setBadge(text, color) {
   chrome.action.setBadgeBackgroundColor({ color });
   chrome.action.setBadgeText({ text });
 }
 
 function connect() {
+  // Identity must be loaded before we can announce ourselves; defer until then.
+  if (sessionId === null) {
+    loadIdentity().then(connect);
+    return;
+  }
   clearTimeout(reconnectTimer);
   try {
     ws = new WebSocket(WS_URL);
@@ -23,7 +77,7 @@ function connect() {
 
   ws.onopen = () => {
     setBadge("ON", "#2e7d32");
-    ws.send(JSON.stringify({ type: "hello", agent: "html-dumper", version: "0.1.0" }));
+    ws.send(helloMessage());
   };
 
   ws.onclose = () => {
@@ -953,6 +1007,15 @@ function ensureAlive() {
 
 chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 }); // ~24s
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === KEEPALIVE_ALARM) ensureAlive(); });
+
+// When the user renames the session in the popup, re-announce it live so the
+// bridge picks up the new name without a reconnect.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.sessionName) return;
+  sessionName = changes.sessionName.newValue || "";
+  updateTitle();
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(helloMessage());
+});
 
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);

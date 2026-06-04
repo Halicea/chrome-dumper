@@ -61,6 +61,9 @@ def _build_parser(for_repl: bool = False) -> _Parser:
     p = _Parser(prog=prog, add_help=not for_repl)
     if not for_repl:
         p.add_argument("--base-url", default=os.environ.get("DUMPER_BASE_URL", DEFAULT_BASE))
+        p.add_argument("--session", default=os.environ.get("DUMPER_SESSION"),
+                       help="target browser session by id or name "
+                            "(optional when only one is connected)")
         p.add_argument("--out-dir", default=os.environ.get("DUMPER_OUT_DIR", "dumps"))
         # Using --wait-server (not --wait) because per-command --wait flags exist.
         p.add_argument("--wait", "--wait-server", dest="wait_server",
@@ -74,6 +77,7 @@ def _build_parser(for_repl: bool = False) -> _Parser:
     sub.add_parser("health")
     sub.add_parser("ping")
     sub.add_parser("tabs")
+    sub.add_parser("sessions", help="list browser sessions connected to the bridge")
     if not for_repl:
         s = sub.add_parser("load", help="run commands from a file (# = comment)")
         s.add_argument("path")
@@ -193,6 +197,8 @@ def _build_parser(for_repl: bool = False) -> _Parser:
     debug_module.register(sub)
 
     if for_repl:
+        s = sub.add_parser("use", help="target a session by id or name for later commands ('use -' to clear)")
+        s.add_argument("name")
         sub.add_parser("help")
         sub.add_parser("quit")
         sub.add_parser("exit")
@@ -206,6 +212,8 @@ def _build_parser(for_repl: bool = False) -> _Parser:
 
 _HELP = """commands:
   health                       bridge status
+  sessions                     list connected browser sessions (* = current target)
+  use <id|name>                target a session for later commands ('use -' to clear)
   ping                         ping the extension
   tabs                         list open tabs
   open <url> [--no-wait]       open a new tab
@@ -258,6 +266,16 @@ def _dispatch(args: argparse.Namespace, d: DumperClient, out_dir: Path) -> None:
         return
     if args.cmd == "health":
         print(json.dumps(d.health(), indent=2))
+    elif args.cmd == "sessions":
+        rows = d.sessions()
+        if not rows:
+            print("(no sessions connected)")
+        for s in rows:
+            cur = "*" if d.session in (s["id"], s["name"]) else " "
+            print(f" {cur} {(s['name'] or ''):<16}  {s['id']}")
+    elif args.cmd == "use":
+        d.session = None if args.name == "-" else args.name
+        print(f"targeting session: {d.session or '(auto — single session)'}")
     elif args.cmd == "ping":
         print(json.dumps(d.ping(), indent=2))
     elif args.cmd == "tabs":
@@ -370,6 +388,8 @@ _COMMANDS: dict[str, list[str]] = {
     "health": [],
     "ping": [],
     "tabs": [],
+    "sessions": [],
+    "use": [],
     "open": ["--no-wait"],
     "nav": ["--tab", "--no-wait"],
     "click": ["--selector", "--text", "--nth", "--tab", "--no-wait"],
@@ -443,13 +463,18 @@ def _repl(d: DumperClient, out_dir: Path) -> None:
     print("chrome-dumper REPL  —  type 'help', 'quit', or Ctrl-D")
     try:
         h = d.health()
-        print(f"bridge ok, extension_connected={h.get('extension_connected')}")
+        sess = h.get("sessions") or []
+        names = ", ".join(f"{s['name']} ({s['id'][:8]})" for s in sess) or "none"
+        print(f"bridge ok, sessions: {names}")
+        if len(sess) > 1 and not d.session:
+            print("multiple sessions connected — use `sessions` to list, "
+                  "`use <name>` to pick one")
     except Exception as e:
         print(f"warning: cannot reach bridge: {e}")
     last_line: Optional[str] = None
     repeat = 1
     session_log: list[str] = []
-    NON_LOGGED = {"save", "load", "clear", "quit", "exit", "help"}
+    NON_LOGGED = {"save", "load", "clear", "quit", "exit", "help", "sessions"}
 
     def _run_one(line: str, source: str = "input") -> bool:
         """Process a single REPL line. Returns False if the loop should exit."""
@@ -530,7 +555,11 @@ def _repl(d: DumperClient, out_dir: Path) -> None:
         return True
 
     while True:
-        prompt = f"dumper [{repeat}x]> " if repeat > 1 else "dumper> "
+        tag = f"({d.session})" if d.session else ""
+        if repeat > 1:
+            prompt = f"dumper{tag} [{repeat}x]> "
+        else:
+            prompt = f"dumper{tag}> "
         try:
             line = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
@@ -626,7 +655,7 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     if not _ensure_bridge(args.base_url, args.wait_server, args.wait_timeout):
         sys.exit(1)
-    with DumperClient(args.base_url) as d:
+    with DumperClient(args.base_url, session=args.session) as d:
         if not args.cmd:
             _repl(d, out_dir)
             return

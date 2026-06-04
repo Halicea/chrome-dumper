@@ -17,8 +17,12 @@ DEFAULT_BASE = "http://127.0.0.1:8766"
 
 
 class DumperClient:
-    def __init__(self, base_url: str = DEFAULT_BASE, timeout: float = 20.0) -> None:
+    def __init__(self, base_url: str = DEFAULT_BASE, timeout: float = 20.0,
+                 session: Optional[str] = None) -> None:
         self.base_url = base_url.rstrip("/")
+        # Target browser session (id or name). None = let the bridge pick when
+        # exactly one session is connected.
+        self.session = session
         self._http = httpx.Client(timeout=timeout)
 
     def __enter__(self) -> "DumperClient":
@@ -30,8 +34,16 @@ class DumperClient:
     def close(self) -> None:
         self._http.close()
 
+    def _params(self, timeout: Optional[float] = None) -> Optional[dict]:
+        params: dict = {}
+        if timeout is not None:
+            params["timeout"] = str(timeout)
+        if self.session:
+            params["session"] = self.session
+        return params or None
+
     def _cmd(self, payload: dict, timeout: Optional[float] = None) -> dict:
-        params = {"timeout": str(timeout)} if timeout is not None else None
+        params = self._params(timeout)
         try:
             r = self._http.post(f"{self.base_url}/cmd", json=payload, params=params)
         except httpx.ConnectError as e:
@@ -45,6 +57,12 @@ class DumperClient:
                 "icon badge should turn green (ON). If it stays OFF, click the "
                 "extension's 'service worker' link to wake it and check devtools."
             )
+        if r.status_code in (404, 409):
+            # Bad/ambiguous session selector — surface the bridge's explanation.
+            try:
+                raise RuntimeError(r.json().get("error") or r.text)
+            except ValueError:
+                raise RuntimeError(r.text)
         if r.status_code == 504:
             raise RuntimeError("extension timed out responding (page may be loading or stuck)")
         r.raise_for_status()
@@ -57,6 +75,12 @@ class DumperClient:
         r = self._http.get(f"{self.base_url}/health")
         r.raise_for_status()
         return r.json()
+
+    def sessions(self) -> list[dict]:
+        """List the browser sessions currently connected to the bridge."""
+        r = self._http.get(f"{self.base_url}/sessions")
+        r.raise_for_status()
+        return r.json()["sessions"]
 
     def ping(self) -> dict:
         return self._cmd({"type": "ping"})

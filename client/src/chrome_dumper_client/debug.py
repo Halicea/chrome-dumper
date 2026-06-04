@@ -99,9 +99,14 @@ def dispatch(args, d: DumperClient) -> bool:
 
 # ---------- SSE client ----------
 
-def _sse_events(base_url: str, tab_id: Optional[int]) -> Iterator[dict]:
+def _sse_events(base_url: str, tab_id: Optional[int],
+                session: Optional[str] = None) -> Iterator[dict]:
     """Generator yielding {} events from the bridge's /events stream."""
-    params = {"tab": str(tab_id)} if tab_id is not None else {}
+    params = {}
+    if tab_id is not None:
+        params["tab"] = str(tab_id)
+    if session:
+        params["session"] = session
     url = f"{base_url.rstrip('/')}/events"
     with httpx.stream("GET", url, params=params, timeout=None) as r:
         r.raise_for_status()
@@ -175,7 +180,7 @@ def _run_listen(d: DumperClient, args) -> None:
     print(f"# listening on {d.base_url}/events  (tab={args.tab or 'all'})  — Ctrl-C to stop",
           file=sys.stderr)
     try:
-        for ev in _sse_events(d.base_url, args.tab):
+        for ev in _sse_events(d.base_url, args.tab, d.session):
             if method_re and not method_re.search(ev.get("method", "")):
                 continue
             if url_re and not url_re.search(_event_url(ev)):
@@ -226,7 +231,7 @@ def _run_pause(d: DumperClient, args) -> None:
     print("# at each prompt: [c]ontinue, [a]bort, [f]ail, q=quit  (default c)", file=sys.stderr)
 
     try:
-        for ev in _sse_events(d.base_url, args.tab):
+        for ev in _sse_events(d.base_url, args.tab, d.session):
             if ev.get("method") != "Fetch.requestPaused":
                 continue
             p = ev.get("params") or {}
