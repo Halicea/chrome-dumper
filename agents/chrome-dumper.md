@@ -21,7 +21,9 @@ You observe pages by dumping their DOM or screenshotting them, and you act on th
 
 Run `uv run dumper health` and expect `extension_connected: true`.
 If it's false or the request fails, the bridge/browser isn't up — STOP and tell
-the caller to start it (`make server`, then `make chrome` or `make firefox`).
+the caller to start it (`make server`, then `make chrome`). If you have a target
+session in mind, `uv run dumper --session <name> spawn` launches its browser for
+you (runs `make chrome SESSION=<name>` and waits for it to connect).
 Do not try to launch it yourself unless explicitly asked.
 
 `health` also reports a `sessions` list — see below.
@@ -48,6 +50,7 @@ to pick which connected browser to act on.
 |---|---|
 | `health` / `ping` | bridge status (incl. `sessions` list) / round-trip to extension |
 | `sessions` | list connected browser sessions (`*` = current target) |
+| `spawn` | launch a Chrome for the current `--session` (runs `make chrome`, waits for connect) |
 | `--session <id\|name> …` | global flag: target a specific browser (omit when only one is connected) |
 | `tabs` | list tabs (id, title, url; `*` = active) — reuse an existing tab id when one already points at your target |
 | `open <url> [--no-wait]` | open a new tab |
