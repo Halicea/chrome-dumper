@@ -21,6 +21,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -78,6 +79,9 @@ def _build_parser(for_repl: bool = False) -> _Parser:
     sub.add_parser("ping")
     sub.add_parser("tabs")
     sub.add_parser("sessions", help="list browser sessions connected to the bridge")
+    s = sub.add_parser("spawn", help="launch a Chrome for the current session (runs `make chrome`)")
+    s.add_argument("--timeout", type=float, default=30.0,
+                   help="seconds to wait for it to connect (default 30; 0 = don't wait)")
     if not for_repl:
         s = sub.add_parser("load", help="run commands from a file (# = comment)")
         s.add_argument("path")
@@ -214,6 +218,8 @@ _HELP = """commands:
   health                       bridge status
   sessions                     list connected browser sessions (* = current target)
   use <id|name>                target a session for later commands ('use -' to clear)
+  spawn [--timeout N]          launch a Chrome for the current session (runs `make chrome`)
+                               waits up to N s for it to connect (N=0 → don't wait)
   ping                         ping the extension
   tabs                         list open tabs
   open <url> [--no-wait]       open a new tab
@@ -276,6 +282,8 @@ def _dispatch(args: argparse.Namespace, d: DumperClient, out_dir: Path) -> None:
     elif args.cmd == "use":
         d.session = None if args.name == "-" else args.name
         print(f"targeting session: {d.session or '(auto — single session)'}")
+    elif args.cmd == "spawn":
+        _spawn_chrome(d, args.timeout)
     elif args.cmd == "ping":
         print(json.dumps(d.ping(), indent=2))
     elif args.cmd == "tabs":
@@ -390,6 +398,7 @@ _COMMANDS: dict[str, list[str]] = {
     "tabs": [],
     "sessions": [],
     "use": [],
+    "spawn": ["--timeout"],
     "open": ["--no-wait"],
     "nav": ["--tab", "--no-wait"],
     "click": ["--selector", "--text", "--nth", "--tab", "--no-wait"],
@@ -607,6 +616,96 @@ def _find_server_dir() -> Optional[Path]:
         if (cand / "pyproject.toml").is_file():
             return cand
     return None
+
+
+def _find_repo_root() -> Optional[Path]:
+    """Locate the repo root (has the Makefile + extension/) so we can `make chrome`."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "Makefile").is_file() and (parent / "extension").is_dir():
+            return parent
+    return None
+
+
+def _wait_for_chrome(d: DumperClient, before: set, timeout: float) -> bool:
+    """Wait until the targeted session connects (or, if untargeted, any new one)."""
+    want = d.session
+    deadline = time.monotonic() + timeout
+    printed = False
+    while time.monotonic() < deadline:
+        try:
+            rows = d.sessions()
+        except Exception:
+            rows = []
+        for s in rows:
+            hit = (want in (s["id"], s["name"])) if want else (s["id"] not in before)
+            if hit:
+                if printed:
+                    print(" ok", file=sys.stderr)
+                print(f"connected: {s['name']} ({s['id']})")
+                if not d.session:  # adopt the new browser for convenience
+                    d.session = s["name"] or s["id"]
+                    print(f"targeting session: {d.session}")
+                return True
+        print("waiting for chrome" if not printed else ".",
+              end="", file=sys.stderr, flush=True)
+        printed = True
+        time.sleep(0.5)
+    if printed:
+        print(" timeout", file=sys.stderr)
+    return False
+
+
+def _spawn_chrome(d: DumperClient, timeout: float) -> None:
+    """Launch `make chrome [SESSION=<name>]` detached, then wait for it to connect."""
+    root = _find_repo_root()
+    if root is None:
+        print("error: can't find the repo root (Makefile) to run `make chrome`.",
+              file=sys.stderr)
+        return
+    # The browser dials into a bridge; without one it can never connect, so a
+    # spawn would just time out. Fail fast with a clear hint instead.
+    try:
+        d.health()
+    except Exception:
+        print(f"error: no bridge reachable at {d.base_url} — start one with "
+              "`make server` first, then `spawn` again.", file=sys.stderr)
+        return
+    sess_arg = f"SESSION={d.session}" if d.session else ""
+    cmd = ["make", "chrome"] + ([sess_arg] if sess_arg else [])
+    if not shutil.which("make"):
+        print(f"error: `make` not found. Run `{' '.join(cmd)}` manually from {root}.",
+              file=sys.stderr)
+        return
+    stage = root / (f".chrome-stage-{d.session}" if d.session else "extension")
+    log_path = Path(tempfile.gettempdir()) / f"dumper-chrome-{d.session or 'default'}.log"
+    try:
+        before = {s["id"] for s in d.sessions()}
+    except Exception:
+        before = set()
+    print(f"spawning: {' '.join(cmd)}  (cwd={root}, log={log_path})", file=sys.stderr)
+    try:
+        log = open(log_path, "wb")
+        subprocess.Popen(
+            cmd, cwd=str(root),
+            stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
+        )
+        log.close()  # the child keeps its own dup of the fd
+    except OSError as e:
+        print(f"error: failed to spawn chrome: {e}", file=sys.stderr)
+        return
+    if timeout <= 0:
+        print(f"launched (not waiting) — run `sessions` once the badge turns green.\n"
+              f"  launch log: {log_path}")
+        return
+    if _wait_for_chrome(d, before, timeout):
+        return
+    print(f"launched, but it hasn't connected within {int(timeout)}s.")
+    print(f"  - check the launch log: {log_path}")
+    print("  - if the toolbar has no HTML Dumper icon, this Chrome blocks "
+          "--load-extension (Chrome 137+).")
+    print(f"    Load it once: chrome://extensions > Developer mode > Load unpacked > {stage}")
+    print("    It then persists in that profile, so future spawns reconnect on their own.")
 
 
 def _autostart_bridge(base_url: str, timeout: float) -> bool:

@@ -6,7 +6,6 @@ Chrome extension + bridge + client for driving a browser tab from a script or RE
 
 ```
 extension/           unpacked MV3 extension — load in chrome://extensions
-firefox-extension/   unpacked MV3 extension for Firefox (about:debugging)
 server/              uv project: bridge (WS for the extension + HTTP control API)
 client/              uv project: `dumper` CLI + DumperClient library
 Makefile             convenience targets
@@ -30,20 +29,7 @@ Option B — **install into your normal Chrome**:
 
 Either way, the extension auto-reconnects to `ws://127.0.0.1:8765` every ~2s, and an alarm keeps the MV3 service worker alive so the WS doesn't die after 30s of idle.
 
-### Firefox
-
-A parallel port lives in `firefox-extension/`. It speaks the same wire protocol against the same bridge — load it in Firefox via:
-
-```bash
-make firefox     # uses web-ext if installed, otherwise launches Firefox at about:debugging
-```
-
-…or manually: open `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `firefox-extension/manifest.json`.
-
-Caveats vs. the Chrome build:
-
-- `debug_*` commands (CDP attach, network capture, request pause/continue) are **not supported** on Firefox — there is no `browser.debugger` equivalent. The extension replies with `error: "debug_not_supported_on_firefox"` (and `debug_status` returns an empty list with `supported: false`).
-- Everything else — `tabs`, `open`, `navigate`, `back/forward`, `click`, `type`, `key`, `select`, `scroll`, `highlight`, `dump`, `screenshot` — works identically.
+> On Chrome/Chromium 137+ the `--load-extension` switch may be disabled. `make chrome` passes the opt-out flag, but if the badge never appears, fall back to **Load unpacked** (Option B) with the dir `make chrome` prints.
 
 ## Run
 
@@ -128,9 +114,11 @@ Each Chrome **profile** that loads the extension is a separate session, so you c
 - The extension generates a stable id per profile (stored in `chrome.storage.local`) and a human **name** you set in its popup ("work", "test", …).
 - Pick a target with `--session <id|name>` on the CLI, `?session=` / `X-Session` on the HTTP API, or `DumperClient(session=...)`. When only one browser is connected the selector is optional.
 - `dumper sessions` lists what's connected; in the REPL, `use <name>` sets the target for later commands (`use -` clears it).
+- `dumper --session work spawn` launches a browser for that session on demand (runs `make chrome SESSION=work` detached and waits for it to connect). Handy from the REPL when the session you `use`d isn't up yet.
 
 ```bash
 dumper sessions                       # see connected browsers
+dumper --session work spawn           # launch the "work" browser if it isn't running
 dumper --session work open https://intranet.local
 dumper --session test open https://staging.example.com
 ```

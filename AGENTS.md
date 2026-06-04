@@ -1,26 +1,21 @@
 # Agents
 
-This project is organized into four main components that work together to provide browser automation capabilities:
+This project is organized into three main components that work together to provide browser automation capabilities:
 
 ## 1. Chrome Extension (`extension/`)
 - A Manifest v3 Chrome extension that runs in a background service worker
 - Communicates with the bridge via WebSocket at `ws://127.0.0.1:8765`
 - Provides full automation capabilities for browser tabs
 - Isolated profile support for clean testing environments
+- Announces a per-profile session id + name so multiple browsers can share one bridge
 
-## 2. Firefox Extension (`firefox-extension/`)
-- Compatible Mozilla extension with the same protocol
-- Uses different approach due to lack of `browser.debugger` API in Firefox
-- Communicates via the same bridge protocol as Chrome extension
-- Supports all core functionality except debug commands
-
-## 3. Server/Bridge (`server/`)
+## 2. Server/Bridge (`server/`)
 - WebSocket server acting as a bridge between clients and extensions
 - HTTP API endpoint at `http://127.0.0.1:8766/cmd` for client commands
 - Handles command routing between clients and extensions
 - Built with Python using websockets, aiohttp, and pillow
 
-## 4. Client/Library (`client/`)
+## 3. Client/Library (`client/`)
 - Command-line interface (CLI) tool named 'dumper'
 - Python library for programmatic use
 - Supports REPL functionality with command history and tab completion
@@ -38,9 +33,9 @@ The extension dials into the bridge. Clients POST JSON commands to the bridge's 
 
 ## Usage Flow
 1. Run `make sync` to setup dependencies using uv
-2. Run `make server` to start the bridge server  
-3. Run `make chrome` or `make firefox` to launch the browser with the extension
-4. Run `make client` to start REPL or use CLI commands
+2. Run `make server` to start the bridge server
+3. Run `make chrome` (or `make chrome SESSION=<name>`) to launch the browser with the extension
+4. Run `make client` (or `make client SESSION=<name>`) to start REPL or use CLI commands
 
 ## Key Features
 - List/open/close browser tabs
@@ -50,4 +45,4 @@ The extension dials into the bridge. Clients POST JSON commands to the bridge's 
 - Take screenshots
 - Navigate pages and wait for load
 - Text selection
-- Support for both Chrome and Firefox
+- Multiple named browser sessions over one bridge
