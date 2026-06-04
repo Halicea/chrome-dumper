@@ -28,7 +28,9 @@ import base64
 import io
 import json
 import os
+import time
 import uuid
+from collections import deque
 from typing import Optional
 
 import websockets
@@ -39,6 +41,72 @@ WS_HOST = os.environ.get("DUMPER_WS_HOST", "127.0.0.1")
 WS_PORT = int(os.environ.get("DUMPER_WS_PORT", "8765"))
 HTTP_HOST = os.environ.get("DUMPER_HTTP_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("DUMPER_HTTP_PORT", "8766"))
+
+# Self-contained status page served at GET / — polls /log.json once a second.
+_STATUS_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>chrome-dumper · live log</title><style>
+ body{font:13px/1.45 system-ui,sans-serif;margin:0;background:#0f1115;color:#e6e6e6}
+ header{padding:10px 14px;background:#171a21;border-bottom:1px solid #262b36;position:sticky;top:0;z-index:1}
+ h1{font-size:14px;margin:0 0 6px;font-weight:600}
+ .sess{display:inline-block;margin:2px 6px 2px 0;padding:2px 8px;border-radius:10px;background:#222834;font-size:12px}
+ .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2e7d32;margin-right:5px}
+ select{background:#222834;color:#e6e6e6;border:1px solid #333b49;border-radius:4px;padding:3px 6px}
+ table{width:100%;border-collapse:collapse}
+ th,td{text-align:left;padding:4px 10px;border-bottom:1px solid #1d222b;white-space:nowrap;vertical-align:top}
+ th{color:#8b93a3;font-weight:500;font-size:11px;text-transform:uppercase}
+ td.detail{white-space:normal;color:#aeb6c2;max-width:620px;overflow-wrap:anywhere}
+ .err{color:#ff6b6b}.ok{color:#7bd88f}.name{color:#9ecbff}.muted{color:#6b7280}
+ tbody tr:hover{background:#161a22}
+</style></head><body>
+<header>
+ <h1>chrome-dumper · live log</h1>
+ <div id="sessions" class="muted">connecting…</div>
+ <div style="margin-top:6px">
+   filter: <select id="filter"><option value="">all sessions</option></select>
+   <span id="count" class="muted"></span>
+   <label style="margin-left:12px"><input type="checkbox" id="paused"> pause</label>
+ </div>
+</header>
+<table><thead><tr>
+ <th>time</th><th>session</th><th>cmd</th><th>status</th><th>ms</th><th>detail</th>
+</tr></thead><tbody id="rows"></tbody></table>
+<script>
+let after=0, filter="", paused=false, total=0;
+const rows=document.getElementById('rows'), filterEl=document.getElementById('filter'),
+      sessEl=document.getElementById('sessions'), countEl=document.getElementById('count'),
+      pausedEl=document.getElementById('paused');
+filterEl.onchange=()=>{filter=filterEl.value;after=0;total=0;rows.innerHTML='';};
+pausedEl.onchange=()=>{paused=pausedEl.checked;};
+const esc=s=>(s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const fmt=ts=>new Date(ts*1000).toLocaleTimeString();
+function addRow(e){
+  const st=e.ok?'<span class=ok>ok</span>':'<span class=err>'+esc(e.status||'error')+'</span>';
+  const tr=document.createElement('tr');
+  tr.innerHTML='<td class=muted>'+fmt(e.ts)+'</td><td class=name>'+esc(e.name)+'</td><td>'
+    +esc(e.type)+'</td><td>'+st+'</td><td class=muted>'+(e.ms!=null?Math.round(e.ms):'')
+    +'</td><td class=detail>'+esc(e.detail)+'</td>';
+  rows.insertBefore(tr, rows.firstChild);
+  while(rows.children.length>800) rows.removeChild(rows.lastChild);
+}
+async function tick(){
+  if(paused) return;
+  try{
+    const d=await (await fetch('/log.json?'+new URLSearchParams({after, session:filter}))).json();
+    after=d.seq;
+    sessEl.innerHTML = d.sessions.length
+      ? d.sessions.map(s=>'<span class=sess><span class=dot></span>'+esc(s.name)+' <span class=muted>'+esc(s.id.slice(0,8))+'</span></span>').join('')
+      : '<span class=muted>no browsers connected</span>';
+    for(const s of d.sessions)
+      if(![...filterEl.options].some(o=>o.value===s.id)){
+        const o=document.createElement('option');o.value=s.id;o.textContent=s.name+' ('+s.id.slice(0,8)+')';filterEl.appendChild(o);
+      }
+    d.entries.forEach(addRow); total+=d.entries.length;
+    countEl.textContent=total?('· '+total+' shown'):'';
+  }catch(e){ sessEl.innerHTML='<span class=err>bridge unreachable</span>'; }
+}
+setInterval(tick,1000); tick();
+</script></body></html>
+"""
 
 
 class SessionLookup(RuntimeError):
@@ -70,6 +138,24 @@ class Bridge:
     def __init__(self) -> None:
         # sessionId -> Session
         self.sessions: dict[str, Session] = {}
+        # rolling log of commands for the status page (newest seq highest)
+        self.log: deque = deque(maxlen=2000)
+        self.log_seq = 0
+
+    def record(self, session: "Session", payload: dict, ok: bool,
+               status: Optional[str], ms: float) -> None:
+        self.log_seq += 1
+        self.log.append({
+            "seq": self.log_seq,
+            "ts": time.time(),
+            "session": session.sid,
+            "name": session.name,
+            "type": payload.get("type"),
+            "ok": ok,
+            "status": status,
+            "ms": round(ms, 1),
+            "detail": _cmd_detail(payload),
+        })
 
     # ---- session registry ----
 
@@ -255,8 +341,12 @@ async def _http_cmd(bridge: Bridge, request: web.Request) -> web.Response:
     except SessionLookup as e:
         return web.json_response({"error": str(e)}, status=e.status)
     timeout = float(request.query.get("timeout", "60"))
+    t0 = time.monotonic()
     try:
         resp = await bridge.request(session, payload, timeout=timeout)
+        ok = resp.get("type") != "error"
+        bridge.record(session, payload, ok,
+                      None if ok else str(resp.get("error")), (time.monotonic() - t0) * 1000)
         if resp.get("type") == "screenshot_result" and resp.get("rect"):
             try:
                 resp = await asyncio.get_event_loop().run_in_executor(None, _crop_screenshot, resp)
@@ -264,8 +354,10 @@ async def _http_cmd(bridge: Bridge, request: web.Request) -> web.Response:
                 return web.json_response({"type": "error", "error": f"crop_failed: {e}"}, status=500)
         return web.json_response(resp)
     except RuntimeError as e:
+        bridge.record(session, payload, False, "no_extension", (time.monotonic() - t0) * 1000)
         return web.json_response({"error": str(e)}, status=503)
     except asyncio.TimeoutError:
+        bridge.record(session, payload, False, "timeout", (time.monotonic() - t0) * 1000)
         return web.json_response({"error": "timeout"}, status=504)
 
 
@@ -315,8 +407,49 @@ async def _http_events(bridge: Bridge, request: web.Request) -> web.StreamRespon
     return resp
 
 
+def _cmd_detail(payload: dict) -> str:
+    """A short human summary of a command for the status log."""
+    for k in ("url", "selector", "text", "value", "placeholder", "label", "to", "key", "requestId"):
+        v = payload.get(k)
+        if v:
+            return f"{k}={str(v)[:80]}"
+    if payload.get("tabIds"):
+        return f"tabs={payload['tabIds']}"
+    if payload.get("tabId"):
+        return f"tab={payload['tabId']}"
+    return ""
+
+
+async def _http_log(bridge: Bridge, request: web.Request) -> web.Response:
+    """JSON feed for the status page: connected sessions + recent commands.
+
+    Query string:
+      session=<id|name>   only commands for this session (default: all)
+      after=<seq>         only commands newer than this seq (for incremental polls)
+    """
+    sel = request.query.get("session") or ""
+    try:
+        after = int(request.query.get("after", "0"))
+    except ValueError:
+        after = 0
+    entries = [e for e in bridge.log
+               if e["seq"] > after and (not sel or sel in (e["session"], e["name"]))]
+    return web.json_response({
+        "sessions": [s.info() for s in bridge.sessions.values()],
+        "entries": entries,
+        "seq": bridge.log_seq,
+    })
+
+
+async def _http_status(_request: web.Request) -> web.Response:
+    return web.Response(text=_STATUS_HTML, content_type="text/html")
+
+
 def _make_app(bridge: Bridge) -> web.Application:
     app = web.Application(client_max_size=64 * 1024 * 1024)
+    app.router.add_get("/", _http_status)
+    app.router.add_get("/status", _http_status)
+    app.router.add_get("/log.json", lambda r: _http_log(bridge, r))
     app.router.add_get("/health", lambda r: _http_health(bridge, r))
     app.router.add_get("/sessions", lambda r: _http_sessions(bridge, r))
     app.router.add_post("/cmd", lambda r: _http_cmd(bridge, r))

@@ -7,6 +7,8 @@ top-level README's "Sessions" section).
 
 - `ws://127.0.0.1:8765` — extensions dial in here (one connection per profile).
 - `http://127.0.0.1:8766` — clients POST JSON commands here:
+  - `GET  /`         → live-log status page (connected sessions + commands, filter by session)
+  - `GET  /log.json` → JSON feed for the status page (`?session=<id|name>&after=<seq>`)
   - `GET  /health`   → `{ ok, extension_connected, sessions: [...] }`
   - `GET  /sessions` → `{ sessions: [ { id, name, connected } ] }`
   - `POST /cmd`      → body is a protocol message (see top-level README); `?session=<id|name>` picks the browser. Returns the extension's reply.

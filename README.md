@@ -127,6 +127,8 @@ dumper --session test open https://staging.example.com
 
 The bridge exposes:
 
+- `GET /` (or `/status`) → a tiny live-log page: connected sessions + a stream of commands clients send, filterable by session. Open `http://127.0.0.1:8766/` in a browser.
+- `GET /log.json?session=<id|name>&after=<seq>` → JSON feed behind that page (sessions + recent commands)
 - `GET /health` → `{ "ok": true, "extension_connected": bool, "sessions": [ { "id", "name", "connected" } ] }`
 - `GET /sessions` → `{ "sessions": [ { "id", "name", "connected" } ] }`
 - `POST /cmd` → body is a protocol message (below); `?session=<id|name>` picks the browser, `?timeout=<s>` overrides the default 60s
