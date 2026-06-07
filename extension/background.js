@@ -761,6 +761,25 @@ async function handle(msg) {
             if (!el) return { ok: false, error: "field_not_found" };
             el.scrollIntoView({ block: "center" });
             el.focus();
+            // Native <select>: match an <option> by value or visible text and
+            // set it via the native setter so React/Vue controlled selects update.
+            if (el.tagName === "SELECT") {
+              const want = norm(value);
+              const opts = [...el.options];
+              const opt = opts.find(o => norm(o.value) === want)
+                || opts.find(o => norm(o.textContent) === want)
+                || opts.find(o => norm(o.textContent).includes(want))
+                || opts.find(o => norm(o.value).includes(want));
+              if (!opt) return { ok: false, error: "option_not_found" };
+              const setter = Object.getOwnPropertyDescriptor(
+                window.HTMLSelectElement.prototype, "value")?.set;
+              if (setter) setter.call(el, opt.value);
+              else el.value = opt.value;
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+              return { ok: true, info: { tag: "select", name: el.name || null,
+                id: el.id || null, value: el.value, text: opt.textContent } };
+            }
             const isCE = el.isContentEditable;
             if (clear) {
               if (isCE) el.textContent = "";
