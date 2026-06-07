@@ -100,6 +100,7 @@ The extension dials into the bridge. Clients POST JSON commands to the bridge's 
 | `clear-highlights [--tab N]` | Remove all overlays |
 | `dump [--tab N]` | Dump live DOM (`document.documentElement.outerHTML`) to `<out-dir>/<tabId>_<title>.html` |
 | `screenshot [--format png\|jpeg] [--quality N] [--rect x,y,w,h \| --selector <css> \| --text <s>] [--out <path>] [--tab N]` | Capture the visible viewport, or just a region. `--selector` / `--text` scroll the element into view first, then crop. PNG by default; saved under `<out-dir>`. |
+| `resize [WxH \| preset] [--width N] [--height N] [--left N] [--top N] [--max\|--full\|--min\|--normal] [--tab N]` | Resize/reposition the browser window. Presets: `phone`, `tablet`, `laptop`, `desktop`, `hd`/`1080p`, `half-left`, `half-right`, plus `max`/`full`/`min`. Returns the actual resulting bounds (the OS may clamp). |
 | `get <url>` | Open the URL, wait for load, dump |
 | `wait [seconds]` | Client-side sleep, default 1 |
 | `help` | (REPL only) show command list |

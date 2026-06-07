@@ -220,6 +220,20 @@ class DumperClient:
         if tab_id is not None: p["tabId"] = tab_id
         return self._cmd(p, timeout=30.0)
 
+    def resize(self, *, width: Optional[int] = None, height: Optional[int] = None,
+               left: Optional[int] = None, top: Optional[int] = None,
+               state: Optional[str] = None, half: Optional[str] = None,
+               tab_id: Optional[int] = None) -> dict:
+        p: dict = {"type": "resize"}
+        if width is not None: p["width"] = width
+        if height is not None: p["height"] = height
+        if left is not None: p["left"] = left
+        if top is not None: p["top"] = top
+        if state: p["state"] = state
+        if half: p["half"] = half
+        if tab_id is not None: p["tabId"] = tab_id
+        return self._cmd(p)
+
     def dump(self, tab_id: Optional[int] = None) -> dict:
         p: dict = {"type": "dump"}
         if tab_id is not None:

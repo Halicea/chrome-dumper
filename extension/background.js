@@ -991,6 +991,56 @@ async function handle(msg) {
         }
       }
 
+      case "resize": {
+        const tab = await getTargetTab(msg);
+        if (!tab) return reply({ id, type: "error", error: "no_tab" });
+        try {
+          const upd = {};
+          // state: maximized / fullscreen / minimized / normal
+          if (msg.state) upd.state = msg.state;
+          // Explicit dimensions require a normal-state window; Chrome ignores
+          // width/height while maximized/fullscreen.
+          const hasBounds = msg.width != null || msg.height != null ||
+            msg.left != null || msg.top != null;
+          if (hasBounds && !msg.state) upd.state = "normal";
+          if (msg.width != null) upd.width = Math.round(msg.width);
+          if (msg.height != null) upd.height = Math.round(msg.height);
+          if (msg.left != null) upd.left = Math.round(msg.left);
+          if (msg.top != null) upd.top = Math.round(msg.top);
+          // "half-left"/"half-right" presets need the screen work-area, which the
+          // service worker can't read directly — resolve it in the page.
+          if (msg.half) {
+            const [{ result: scr }] = await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: () => ({
+                availWidth: screen.availWidth, availHeight: screen.availHeight,
+                availLeft: screen.availLeft ?? 0, availTop: screen.availTop ?? 0,
+              }),
+            });
+            upd.state = "normal";
+            upd.top = scr.availTop;
+            upd.height = scr.availHeight;
+            upd.width = Math.floor(scr.availWidth / 2);
+            upd.left = msg.half === "right"
+              ? scr.availLeft + Math.ceil(scr.availWidth / 2)
+              : scr.availLeft;
+          }
+          // Maximizing/fullscreen must not also carry bounds (Chrome rejects it).
+          if (upd.state === "maximized" || upd.state === "fullscreen" ||
+              upd.state === "minimized") {
+            delete upd.width; delete upd.height; delete upd.left; delete upd.top;
+          }
+          const win = await chrome.windows.update(tab.windowId, upd);
+          return reply({
+            id, type: "resized", tabId: tab.id, windowId: win.id,
+            state: win.state,
+            width: win.width, height: win.height, left: win.left, top: win.top,
+          });
+        } catch (e) {
+          return reply({ id, type: "error", error: String(e?.message || e) });
+        }
+      }
+
       case "dump": {
         const tab = await getTargetTab(msg);
         if (!tab) return reply({ id, type: "error", error: "no_tab" });

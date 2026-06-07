@@ -32,6 +32,49 @@ from .client import DEFAULT_BASE, DumperClient
 from . import debug as debug_module
 
 
+# Convenient window-size presets (width, height in CSS px). State-only presets
+# ("max", "full", "min") map to window states and are handled separately.
+_RESIZE_PRESETS: dict[str, tuple[int, int]] = {
+    "phone": (414, 896),
+    "tablet": (834, 1112),
+    "laptop": (1366, 768),
+    "desktop": (1440, 900),
+    "hd": (1920, 1080),
+    "1080p": (1920, 1080),
+}
+
+
+def _parse_resize(args) -> dict:
+    """Turn resize CLI args into kwargs for DumperClient.resize()."""
+    kw: dict = {"tab_id": args.tab}
+    if args.state:
+        kw["state"] = args.state
+    size = (args.size or "").strip().lower()
+    if size in ("max", "maximize", "maximized"):
+        kw["state"] = "maximized"
+    elif size in ("full", "fullscreen"):
+        kw["state"] = "fullscreen"
+    elif size in ("min", "minimize", "minimized"):
+        kw["state"] = "minimized"
+    elif size in ("left", "half-left"):
+        kw["half"] = "left"
+    elif size in ("right", "half-right"):
+        kw["half"] = "right"
+    elif size in _RESIZE_PRESETS:
+        kw["width"], kw["height"] = _RESIZE_PRESETS[size]
+    elif size:
+        sep = "x" if "x" in size else ("," if "," in size else None)
+        if not sep:
+            raise ValueError(f"bad size {args.size!r}: use WxH or a preset")
+        w, h = size.split(sep, 1)
+        kw["width"], kw["height"] = int(w), int(h)
+    if args.width is not None: kw["width"] = args.width
+    if args.height is not None: kw["height"] = args.height
+    if args.left is not None: kw["left"] = args.left
+    if args.top is not None: kw["top"] = args.top
+    return kw
+
+
 class _ReplExit(Exception):
     pass
 
@@ -196,6 +239,23 @@ def _build_parser(for_repl: bool = False) -> _Parser:
     s.add_argument("--tab", type=int)
     s.add_argument("tabs", nargs="*", type=int, help="tab ids (overrides --tab)")
     s = sub.add_parser("get");  s.add_argument("url")
+
+    s = sub.add_parser("resize", help="resize/reposition the browser window")
+    s.add_argument("size", nargs="?",
+                   help="WxH (e.g. 1280x800) or a preset: " + ", ".join(_RESIZE_PRESETS))
+    s.add_argument("--width", type=int)
+    s.add_argument("--height", type=int)
+    s.add_argument("--left", type=int, help="window x position")
+    s.add_argument("--top", type=int, help="window y position")
+    s.add_argument("--max", dest="state", action="store_const", const="maximized",
+                   help="maximize the window")
+    s.add_argument("--full", dest="state", action="store_const", const="fullscreen",
+                   help="fullscreen the window")
+    s.add_argument("--min", dest="state", action="store_const", const="minimized",
+                   help="minimize the window")
+    s.add_argument("--normal", dest="state", action="store_const", const="normal",
+                   help="restore to a normal window")
+    s.add_argument("--tab", type=int)
 
     # CDP / Chrome Debugger Protocol commands (separate module).
     debug_module.register(sub)
@@ -385,6 +445,8 @@ def _dispatch(args: argparse.Namespace, d: DumperClient, out_dir: Path) -> None:
         resp = d.dump(tab_id=args.tab)
         path = _write_dump(resp, out_dir)
         print(f"wrote {path}  ({len(resp['html'])} bytes)  url={resp.get('url')}")
+    elif args.cmd == "resize":
+        print(json.dumps(d.resize(**_parse_resize(args)), indent=2))
     elif args.cmd == "get":
         opened = d.open(args.url, wait=True)
         resp = d.dump(tab_id=opened["tabId"])
@@ -418,6 +480,8 @@ _COMMANDS: dict[str, list[str]] = {
     "scroll": ["up", "down", "--pages", "--pixels", "--to", "--no-smooth", "--tab"],
     "highlight": ["--selector", "--text", "--rect", "--all", "--nth", "--color", "--label", "--duration", "--no-scroll", "--tab"],
     "clear-highlights": ["--tab"],
+    "resize": ["--width", "--height", "--left", "--top", "--max", "--full",
+               "--min", "--normal", "--tab"],
     "get": [],
     "save": [],
     "load": [],

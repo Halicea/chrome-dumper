@@ -64,6 +64,7 @@ to pick which connected browser to act on.
 | `highlight --selector|--text|--rect [--all] [--color #hex] [--label <s>] [--duration MS]` | draw a red overlay over a region |
 | `dump [--tab N]` | dump live DOM to `client/dumps/<tabId>_<title>.html` |
 | `screenshot [--rect|--selector|--text] [--out <path>] [--tab N]` | capture viewport / region |
+| `resize [WxH|preset] [--max|--full|--min] [--tab N]` | resize the window; presets: `phone`/`tablet`/`laptop`/`desktop`/`hd`, `half-left`/`half-right` |
 | `get <url>` | open + wait + dump in one shot |
 | `wait [seconds]` | client-side sleep (default 1) |
 
