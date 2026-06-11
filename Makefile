@@ -33,6 +33,8 @@ help:
 	@echo "                  override with CHROME=/path/to/chrome"
 	@echo "                  SESSION=<name> launches a separate, named browser session"
 	@echo "                  (own profile .chrome-profile-<name>; run several at once)"
+	@echo "                  reuse a real Chrome profile with PROFILE_DIR=<user-data-dir> CHROME_PROFILE=<name>"
+	@echo "                  (quit Chrome first; on mac also set CHROME=/path/to/Google Chrome)"
 	@echo "  make clean    - remove .venv dirs and dumps/"
 	@echo "  make install-agent - install the chrome-dumper subagent into $(AGENTS_DIR)"
 	@echo "                  (paths in the definition are rewritten to point at this repo)"
@@ -64,6 +66,7 @@ endif
 	@echo "load $(CHROME_EXT_DIR) once via chrome://extensions > Load unpacked."
 	"$(CHROME)" \
 	    --user-data-dir="$(PROFILE_DIR)" \
+	    $(if $(strip $(CHROME_PROFILE)),--profile-directory="$(CHROME_PROFILE)",) \
 	    --load-extension="$(CHROME_EXT_DIR)" \
 	    --disable-features=DisableLoadExtensionCommandLineSwitch \
 	    --no-first-run \
