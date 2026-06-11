@@ -1,7 +1,10 @@
-.PHONY: help sync server client repl chrome clean clean-chrome
+.PHONY: help sync server client repl chrome clean clean-chrome install-agent
 
 CHROME ?= $(shell command -v google-chrome 2>/dev/null || command -v google-chrome-stable 2>/dev/null || command -v chromium 2>/dev/null || command -v chromium-browser 2>/dev/null || command -v chrome 2>/dev/null)
 EXT_DIR := $(CURDIR)/extension
+
+# Where Claude looks for global (user-level) subagents.
+AGENTS_DIR ?= $(HOME)/.claude/agents
 
 # Optional session name (by id or name for the client; a label for chrome).
 #   make client SESSION=work   -> REPL targets the "work" browser
@@ -31,6 +34,8 @@ help:
 	@echo "                  SESSION=<name> launches a separate, named browser session"
 	@echo "                  (own profile .chrome-profile-<name>; run several at once)"
 	@echo "  make clean    - remove .venv dirs and dumps/"
+	@echo "  make install-agent - install the chrome-dumper subagent into $(AGENTS_DIR)"
+	@echo "                  (paths in the definition are rewritten to point at this repo)"
 	@echo ""
 	@echo "Typical use: 'make server' in one terminal, 'make client' in another."
 
@@ -65,6 +70,21 @@ endif
 	    --no-default-browser-check \
 	    --new-window \
 	    "about:blank"
+
+# Install the subagent definition globally. The committed agents/chrome-dumper.md
+# uses repo-relative commands (`cd client`, `make …`, `client/dumps/`) that only
+# work from inside the repo; rewrite them to absolute paths anchored at $(CURDIR)
+# so the agent works no matter which directory Claude is invoked from. Uses '#' as
+# the sed delimiter since the paths contain '/'.
+install-agent:
+	@mkdir -p "$(AGENTS_DIR)"
+	@sed -e 's#cd client#cd $(CURDIR)/client#g' \
+	     -e 's#make server#make -C $(CURDIR) server#g' \
+	     -e 's#make chrome#make -C $(CURDIR) chrome#g' \
+	     -e 's#client/dumps#$(CURDIR)/client/dumps#g' \
+	     "$(CURDIR)/agents/chrome-dumper.md" > "$(AGENTS_DIR)/chrome-dumper.md"
+	@echo "installed chrome-dumper agent -> $(AGENTS_DIR)/chrome-dumper.md"
+	@echo "  (commands point at repo: $(CURDIR))"
 
 clean:
 	rm -rf server/.venv client/.venv client/dumps
