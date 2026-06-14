@@ -258,7 +258,10 @@ class Bridge:
                     session.pending.pop(mid).set_result(msg)
                 elif msg.get("type") == "keepalive":
                     pass  # heartbeat from extension to keep MV3 SW alive
-                elif msg.get("type") == "debug_event":
+                elif msg.get("type") in ("debug_event", "plugin_event"):
+                    # Pure transport: fan unsolicited extension→client events out
+                    # to /events subscribers (CDP debug events + plugin events).
+                    # The bridge stays domain-agnostic — it routes, never interprets.
                     self._dispatch_event(session, msg)
                 else:
                     print(f"[?] unsolicited: {msg}")

@@ -30,6 +30,7 @@ from typing import Optional
 
 from .client import DEFAULT_BASE, DumperClient
 from . import debug as debug_module
+from . import messaging as messaging_module
 
 
 # Convenient window-size presets (width, height in CSS px). State-only presets
@@ -260,6 +261,9 @@ def _build_parser(for_repl: bool = False) -> _Parser:
     # CDP / Chrome Debugger Protocol commands (separate module).
     debug_module.register(sub)
 
+    # messaging plugin (LinkedIn draft-assist) — client half (separate module).
+    messaging_module.register(sub)
+
     if for_repl:
         s = sub.add_parser("use", help="target a session by id or name for later commands ('use -' to clear)")
         s.add_argument("name")
@@ -329,6 +333,9 @@ def _dispatch(args: argparse.Namespace, d: DumperClient, out_dir: Path) -> None:
         print(_HELP); return
     # CDP / debug commands live in their own module.
     if debug_module.dispatch(args, d):
+        return
+    # messaging draft-assist lives in its own module.
+    if messaging_module.dispatch(args, d):
         return
     if args.cmd == "health":
         print(json.dumps(d.health(), indent=2))

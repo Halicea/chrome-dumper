@@ -1,0 +1,8 @@
+{
+  "id": "pipeline",
+  "name": "LinkedIn pipeline export",
+  "version": "0.1.0",
+  "description": "Read-only export of a LinkedIn Recruiter project's full candidate pipeline — active + archived — via the talentRecruiterSearchHits pipelineSearch finder, run in the live recruiter session (cookies + csrf are the browser's). Never writes to LinkedIn.",
+  "match": ["*://*.linkedin.com/talent/*"],
+  "commands": ["pipeline_fetch"]
+}

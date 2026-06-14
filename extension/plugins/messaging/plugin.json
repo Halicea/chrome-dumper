@@ -1,0 +1,11 @@
+{
+  "id": "messaging",
+  "name": "LinkedIn draft messaging",
+  "version": "0.2.0",
+  "description": "Draft-assist for LinkedIn Recruiter InMail. The extension half exposes browser primitives + the in-drawer panel; the client half (client/.../plugins/messaging.py) reads the local sourcing repo, matches the candidate, renders the template, and injects the draft. The bridge is a pure relay. Never sends.",
+  "match": ["*://*.linkedin.com/talent/*", "*://*.linkedin.com/*"],
+  "extension_commands": ["messaging_scan", "inject_value", "messaging_set_status", "messaging_mount", "messaging_unmount"],
+  "client_subcommands": ["messaging watch", "messaging insert", "messaging mount", "messaging unmount"],
+  "panel": { "panelId": "cd-messaging-panel", "button": "Insert draft", "handoff": "plugin_event" },
+  "config": { "SOURCING_ROOT": "path to the sourcing repo", "RECRUITER_NAME": "value for {{recruiter_name}}" }
+}

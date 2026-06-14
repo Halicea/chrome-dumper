@@ -4,6 +4,11 @@ const RECONNECT_MS = 2000;
 // CDP module (handles debug_* commands; forwards CDP events via reply()).
 try { importScripts("debugger.js"); } catch (e) { console.error("debugger.js load failed:", e); }
 
+// Plugin SDK: registry + bundled plugins (see plugins/loader.js + plugins/README.md).
+// Plugins self-register command types that handle() dispatches before the
+// built-in switch. Imported here during synchronous SW startup (MV3 requirement).
+try { importScripts("plugins/loader.js"); } catch (e) { console.error("plugins loader failed:", e); }
+
 let ws = null;
 let reconnectTimer = null;
 
@@ -147,6 +152,12 @@ async function handle(msg) {
         self.debugModule && typeof self.debugModule.handleDebugCommand === "function") {
       const r = await self.debugModule.handleDebugCommand(msg, getTargetTab);
       if (r) return reply({ id, ...r });
+    }
+    // Delegate registered plugin command types (extension/plugins/*) before the
+    // built-in switch, so plugins can add new commands without editing this file.
+    if (self.pluginRegistry && self.pluginRegistry.has(msg.type)) {
+      const r = await self.pluginRegistry.run(msg, self.makePluginCtx());
+      return reply({ id, ...(r || {}) });
     }
     switch (msg.type) {
       case "ping":
