@@ -98,28 +98,56 @@
         wrap.innerHTML = html;
         shadow.append(style, wrap);
         (document.body || document.documentElement).appendChild(host);
-        shadow.addEventListener("click", (e) => {
-          const t = e.target.closest("[data-plugin-action]");
-          if (!t) return;
-          const action = t.getAttribute("data-plugin-action");
+        // Send a panel action to the SW. `quiet` skips the status churn (used for
+        // background signals like panel_ready / form changes).
+        function send(action, payload, quiet) {
           const statusEl = shadow.querySelector("[data-plugin-status]");
-          if (statusEl) statusEl.textContent = "working…";
+          if (statusEl && !quiet) statusEl.textContent = "working…";
           try {
-            chrome.runtime.sendMessage({ type: "__plugin_action", plugin, action }, (resp) => {
+            chrome.runtime.sendMessage({ type: "__plugin_action", plugin, action, payload: payload || null }, (resp) => {
               if (chrome.runtime.lastError) {
-                if (statusEl) statusEl.textContent = "error: " + chrome.runtime.lastError.message;
+                if (statusEl && !quiet) statusEl.textContent = "error: " + chrome.runtime.lastError.message;
                 return;
               }
-              if (statusEl) {
+              if (statusEl && !quiet) {
                 statusEl.textContent = resp && resp.ok
                   ? (resp.message || "done")
                   : ("error: " + ((resp && resp.error) || "failed"));
               }
             });
           } catch (err) {
-            if (statusEl) statusEl.textContent = "error: " + String(err);
+            if (statusEl && !quiet) statusEl.textContent = "error: " + String(err);
           }
+        }
+        // Buttons → click; form controls (<select>) → change with their value.
+        shadow.addEventListener("click", (e) => {
+          const t = e.target.closest("[data-plugin-action]");
+          if (!t || t.tagName === "SELECT" || t.tagName === "INPUT" || t.tagName === "OPTION") return;
+          send(t.getAttribute("data-plugin-action"));
         });
+        shadow.addEventListener("change", (e) => {
+          const t = e.target.closest("[data-plugin-action]");
+          if (!t) return;
+          send(t.getAttribute("data-plugin-action"), { value: t.value }, true);
+        });
+        // Announce readiness so the client can populate dynamic UI (e.g. job list).
+        send("panel_ready", null, true);
+        // Emit a generic "navigated" event when the SPA URL changes (e.g. opening
+        // a different conversation), so plugins can react. Self-cleans when the
+        // panel host is removed.
+        let lastUrl = location.href;
+        const navTimer = setInterval(() => {
+          if (!document.getElementById(panelId)) { clearInterval(navTimer); return; }
+          if (location.href !== lastUrl) { lastUrl = location.href; send("navigated", { url: location.href }, true); }
+        }, 1200);
+        // Periodic heartbeat so a plugin can autosave page state (e.g. the
+        // conversation thread on scroll / send / receive). Fires regardless of
+        // tab visibility — messages can arrive while the tab is backgrounded;
+        // dedup on the client makes repeats cheap.
+        const tickTimer = setInterval(() => {
+          if (!document.getElementById(panelId)) { clearInterval(tickTimer); return; }
+          send("tick", { url: location.href }, true);
+        }, 3000);
         return { ok: true };
       },
     });

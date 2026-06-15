@@ -126,9 +126,6 @@ class Session:
         self.name = name
         self.ws = ws
         self.pending: dict[str, asyncio.Future] = {}
-        # tabId -> set of asyncio.Queue (one per SSE subscriber)
-        # None tabId in the set means "subscribe to all tabs"
-        self.event_subs: dict[Optional[int], set[asyncio.Queue]] = {}
 
     def info(self) -> dict:
         return {"id": self.sid, "name": self.name, "connected": True}
@@ -138,6 +135,10 @@ class Bridge:
     def __init__(self) -> None:
         # sessionId -> Session
         self.sessions: dict[str, Session] = {}
+        # sessionId -> { tabId|None -> set(asyncio.Queue) }. Keyed by sid (not the
+        # Session object) so /events subscriptions survive the extension
+        # reconnecting (e.g. a reload), which recreates the Session.
+        self.event_subs: dict[str, dict] = {}
         # rolling log of commands for the status page (newest seq highest)
         self.log: deque = deque(maxlen=2000)
         self.log_seq = 0
@@ -171,9 +172,12 @@ class Bridge:
         self.sessions[sid] = session
         return session
 
-    def unregister(self, session: Session) -> None:
-        # Only drop it if this socket is still the current one for the id;
-        # a reconnect may have already replaced it.
+    def unregister(self, session: Session, ws=None) -> None:
+        # A reconnect (e.g. extension reload) rebinds the same Session object to a
+        # newer socket. If this closing socket is no longer the current one, keep
+        # the session — and crucially its /events subscriptions — intact.
+        if ws is not None and session.ws is not ws:
+            return
         if self.sessions.get(session.sid) is session:
             self.sessions.pop(session.sid, None)
         for fut in session.pending.values():
@@ -210,22 +214,28 @@ class Bridge:
 
     def subscribe(self, session: Session, tab_id: Optional[int]) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=2048)
-        session.event_subs.setdefault(tab_id, set()).add(q)
+        self.event_subs.setdefault(session.sid, {}).setdefault(tab_id, set()).add(q)
         return q
 
     def unsubscribe(self, session: Session, tab_id: Optional[int], q: asyncio.Queue) -> None:
-        s = session.event_subs.get(tab_id)
+        subs = self.event_subs.get(session.sid)
+        if not subs:
+            return
+        s = subs.get(tab_id)
         if s:
             s.discard(q)
             if not s:
-                session.event_subs.pop(tab_id, None)
+                subs.pop(tab_id, None)
+        if not subs:
+            self.event_subs.pop(session.sid, None)
 
     def _dispatch_event(self, session: Session, msg: dict) -> None:
+        subs = self.event_subs.get(session.sid, {})
         tab_id = msg.get("tabId")
         targets = []
         if tab_id is not None:
-            targets += list(session.event_subs.get(tab_id, ()))
-        targets += list(session.event_subs.get(None, ()))
+            targets += list(subs.get(tab_id, ()))
+        targets += list(subs.get(None, ()))
         for q in targets:
             try:
                 q.put_nowait(msg)
@@ -268,7 +278,7 @@ class Bridge:
         finally:
             if session is not None:
                 print(f"[-] extension disconnected: {session.name} ({session.sid})")
-                self.unregister(session)
+                self.unregister(session, ws)
             else:
                 print("[-] extension disconnected (no hello received)")
 
