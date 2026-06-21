@@ -139,6 +139,36 @@ async function handleDebugCommand(msg, getTargetTab) {
         return { type: "error", error: `get_body_failed: ${e.message}` };
       }
     }
+    case "debug_eval": {
+      // Run caller-supplied JS in the page via CDP Runtime.evaluate. Unlike the
+      // userScripts-based `js` command, this reliably supports async: the code is
+      // wrapped in an async IIFE and evaluated with awaitPromise+returnByValue, so
+      // `await fetch(...)` works and the resolved JSON value is returned. Runs in
+      // the page's MAIN realm in the live session (cookies + csrf are the page's),
+      // and is exempt from the page CSP (it's the debugger). Auto-attaches (shows
+      // the "being debugged" banner); call debug_detach when done. CAN write.
+      //   { type:"debug_eval", tabId?, code:"…", args?:<json> }
+      const tab = await getTargetTab(msg);
+      if (!tab) return { type: "error", error: "no_tab" };
+      if (typeof msg.code !== "string" || !msg.code) return { type: "error", error: "missing 'code' (string)" };
+      try {
+        await _attach(tab.id, { network: false }); // idempotent; just need the debugger session
+        const expression =
+          "(async () => { const args = " + JSON.stringify(msg.args === undefined ? null : msg.args) + ";\n" +
+          msg.code + "\n})()";
+        const r = await _sendCommand(tab.id, "Runtime.evaluate", {
+          expression, awaitPromise: true, returnByValue: true, userGesture: true,
+        });
+        if (r.exceptionDetails) {
+          const ex = r.exceptionDetails;
+          const emsg = (ex.exception && (ex.exception.description || ex.exception.value)) || ex.text || "eval exception";
+          return { type: "debug_eval_result", tabId: tab.id, ok: false, error: String(emsg) };
+        }
+        return { type: "debug_eval_result", tabId: tab.id, ok: true, result: r.result ? r.result.value : null };
+      } catch (e) {
+        return { type: "error", error: `eval_failed: ${e.message || e}` };
+      }
+    }
     case "debug_pause_continue": {
       // action: "continue" (default) | "fail" | "fulfill"
       const tab = await getTargetTab(msg);

@@ -239,3 +239,38 @@ class DumperClient:
         if tab_id is not None:
             p["tabId"] = tab_id
         return self._cmd(p)
+
+    def js(self, code: str, *, args: Any = None, tab_id: Optional[int] = None,
+           timeout: Optional[float] = None) -> dict:
+        """Run caller-supplied JavaScript in a tab via CDP ``Runtime.evaluate`` —
+        in the page's MAIN realm, in the live logged-in session (cookies + csrf are
+        the page's), exempt from the page CSP.
+
+        ``code`` is wrapped in an async IIFE, so it can ``await`` (e.g.
+        ``await fetch(...)``) and ``return`` — the resolved value comes back under
+        ``result`` (``{"ok":true,"result":...}``); a thrown error → ``{"ok":false,
+        "error":...}``. The optional ``args`` JSON value is exposed as ``args``.
+
+        This auto-attaches the Chrome debugger to the tab (the "being debugged"
+        banner appears) and leaves it attached for reuse; call ``detach`` (or
+        ``dumper detach``) when done. CAN write (save/archive/message) — unlike the
+        read-only pipeline export. Use deliberately.
+
+        (A second, no-attach best-effort variant exists as the bridge ``js``
+        command — userScripts-based, synchronous-only — but CDP eval is the
+        reliable path and what this method uses.)
+        """
+        p: dict = {"type": "debug_eval", "code": code}
+        if args is not None:
+            p["args"] = args
+        if tab_id is not None:
+            p["tabId"] = tab_id
+        return self._cmd(p, timeout=timeout)
+
+    def detach(self, tab_id: Optional[int] = None) -> dict:
+        """Detach the Chrome debugger from a tab (removes the banner). Pairs with
+        the auto-attach that ``js`` performs."""
+        p: dict = {"type": "debug_detach"}
+        if tab_id is not None:
+            p["tabId"] = tab_id
+        return self._cmd(p)

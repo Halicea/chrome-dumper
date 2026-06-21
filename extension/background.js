@@ -1063,6 +1063,63 @@ async function handle(msg) {
         });
       }
 
+      case "js": {
+        // Run caller-supplied JavaScript in a tab, in the live logged-in session
+        // (cookies + csrf are the browser's). The generic primitive so a skill can
+        // call a site's own authenticated endpoints by shipping JS as a string —
+        // no dedicated plugin, no extension reload.
+        //
+        // Why not chrome.scripting.executeScript: MV3 forbids compiling a string
+        // into a function (eval / new Function) in BOTH worlds — the page CSP
+        // blocks it in MAIN, and the extension's own CSP blocks it in ISOLATED.
+        // The sanctioned path for arbitrary string code is the userScripts API and
+        // its CSP-exempt USER_SCRIPT world. Needs the one-time per-extension
+        // "Allow user scripts" toggle (chrome://extensions, Developer mode).
+        //
+        //   { type:"js", tabId?, code:"…", args?:<json>, world?:"USER_SCRIPT"|"MAIN" }
+        // The source becomes the body of an async IIFE, so it can `await` and
+        // `return`. `args` (any JSON) is exposed as a const. The returned value is
+        // relayed back under `result`; a throw comes back as { ok:false, error }.
+        // USER_SCRIPT (default): isolated world, document.cookie carries the
+        // non-httpOnly JSESSIONID (csrf) and credentialed same-origin fetch
+        // attaches li_at — the site's endpoints behave as they do for the app.
+        // CAN write (save/archive/message) — use deliberately.
+        const tab = await getTargetTab(msg);
+        if (!tab) return reply({ id, type: "error", error: "no_tab" });
+        if (typeof msg.code !== "string" || !msg.code)
+          return reply({ id, type: "error", error: "missing 'code' (string)" });
+        if (!chrome.userScripts)
+          return reply({ id, type: "error", error: "userScripts API unavailable — open chrome://extensions, enable Developer mode, turn ON this extension's 'Allow user scripts' toggle, then reload it." });
+        try {
+          // chrome.userScripts.execute clones the script's COMPLETION VALUE
+          // synchronously and does NOT await promises (a Promise completion value
+          // clones to null). So the caller code is run SYNCHRONOUSLY and its
+          // completion value is returned. For network calls that must return data,
+          // use a SYNCHRONOUS XMLHttpRequest — xhr.open(method, url, false). Same-
+          // origin requests still carry the session cookies (li_at) and you set the
+          // csrf header from document.cookie, so it behaves like the app's own fetch
+          // but returns inline. (A bare `await fetch(...)` resolves to a Promise →
+          // cloned as null → "no_result".)
+          const world = msg.world === "MAIN" ? "MAIN" : "USER_SCRIPT";
+          const wrapped =
+            "const args = " + JSON.stringify(msg.args === undefined ? null : msg.args) + ";\n" +
+            "(() => {\n" +
+            "  try { return { ok: true, result: ((() => {\n" + msg.code + "\n  })() ?? null) }; }\n" +
+            "  catch (e) { return { ok: false, error: String((e && e.stack) || (e && e.message) || e) }; }\n" +
+            "})();";
+          const results = await chrome.userScripts.execute({
+            target: { tabId: tab.id }, world, injectImmediately: true, js: [{ code: wrapped }],
+          });
+          const first = results && results[0];
+          if (first && first.error) return reply({ id, type: "error", error: String(first.error) });
+          if (first && first.result != null) return reply({ id, type: "js_result", tabId: tab.id, ...first.result });
+          return reply({ id, type: "js_result", tabId: tab.id, ok: false,
+            error: "no_result (injection blocked, frame gone, or the code returned a Promise — use a synchronous XHR for network calls)" });
+        } catch (e) {
+          return reply({ id, type: "error", error: String(e?.message || e) });
+        }
+      }
+
       default:
         return reply({ id, type: "error", error: "unknown_type", got: msg.type });
     }
