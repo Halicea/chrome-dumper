@@ -206,4 +206,6 @@
   // --- bundled plugins (static list — MV3 can't discover at runtime) ---------
   try { importScripts("plugins/messaging/commands.js"); }
   catch (e) { console.error("[plugin] messaging load failed:", e); }
+  try { importScripts("plugins/pipeline/commands.js"); }
+  catch (e) { console.error("[plugin] pipeline load failed:", e); }
 })();
