@@ -81,7 +81,8 @@ async function _smoothMoveTo(tabId, x0, y0, x1, y1, opts) {
     return;
   }
   const steps = opts.steps != null ? opts.steps : Math.max(10, Math.min(45, Math.round(dist / 11)));
-  const durationMs = opts.durationMs != null ? opts.durationMs : Math.max(140, Math.min(600, dist * 1.15));
+  // Default glide speed (~33% faster than the original dist*1.15 / 140–600ms).
+  const durationMs = opts.durationMs != null ? opts.durationMs : Math.max(94, Math.min(402, dist * 0.77));
   const stepDelay = durationMs / steps;
   // Control point bowed perpendicular to the path for a gentle arc.
   const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
