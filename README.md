@@ -88,6 +88,15 @@ The extension dials into the bridge. Clients POST JSON commands to the bridge's 
 | `nav <url> [--tab N] [--no-wait]` | Navigate an existing tab (active by default) |
 | `close [--tab N \| <id>…]` | Close active tab, one id, or many |
 | `click [--selector <css> \| --text <s>] [--nth N] [--tab N] [--wait]` | Click. No target → click currently focused element. `--wait` only if the click navigates. |
+| `mouse-move <x> <y> [--tab N]` | Move the cursor to viewport coords (CSS px, the same space `screenshot` uses). Real, trusted `mousemove` via CDP — triggers `:hover`. Returns the element under the cursor. |
+| `mouse-click <x> <y> [--button left\|right\|middle] [--count N \| --double] [--wait] [--tab N]` | Real, trusted click at viewport coords (move → press → release). |
+| `mouse-drag <x1> <y1> <x2> <y2> [--steps N] [--button B] [--tab N]` | Press at p1, move to p2 in steps, release. |
+| `mouse-up\|down\|left\|right [N] [--less \| --more] [--tab N]` | Nudge the cursor in a direction, relative to its current position. Default 10px; `--less` 1px, `--more` 100px, or an explicit `N`. |
+| `mouse-hide [--tab N]` | Remove the visible cursor overlay. |
+
+The `mouse-*` commands draw a **visible cursor** (a teal ring) into the page at the synthetic pointer's position — CDP input moves a virtual pointer the browser doesn't render, so this overlay shows where it is; clicks add a red ripple. It clears on navigation/reload, or with `mouse-hide`. The wire protocol accepts `"cursor": false` on any `mouse_*` message to suppress it.
+
+To **click an element by description** ("the Edit JD button, top right"), there's no separate command — drive it from an LLM/agent: `screenshot` the viewport, look at the image, estimate the target as a fraction of the viewport, multiply by `innerWidth`/`innerHeight` (get them via `js`), then `mouse-click` at those coords. The bundled `chrome-dumper` subagent documents this flow.
 | `type <value> [--selector \| --placeholder \| --label]  [--nth N] [--no-clear] [--submit] [--wait] [--tab N]` | Type into a field. With no target, types into the focused element. `--submit` presses Enter / submits the form. `input` is an alias. |
 | `key <KeyName> [--shift] [--ctrl] [--alt] [--meta] [--selector <css>] [--wait] [--tab N]` | Press a key (`Enter`, `Escape`, `ArrowDown`, `a`, …). `Tab` does focus traversal (synthetic Tab events don't move focus in Chrome). |
 | `tab [--shift]` | Shortcut for `key Tab [--shift]` |
@@ -99,8 +108,10 @@ The extension dials into the bridge. Clients POST JSON commands to the bridge's 
 | `highlight --selector <css> \| --text <s> \| --rect x,y,w,h  [--all] [--nth N] [--color #hex] [--label <s>] [--duration MS] [--no-scroll] [--tab N]` | Draw a red rectangle over a region (overlay div, doesn't affect layout). Persistent unless `--duration` set. |
 | `clear-highlights [--tab N]` | Remove all overlays |
 | `dump [--tab N]` | Dump live DOM (`document.documentElement.outerHTML`) to `<out-dir>/<tabId>_<title>.html` |
+| `js '<code>' [--tab N]` | Run JS in the page via CDP (`Runtime.evaluate`, async IIFE — `return` a JSON value). Auto-attaches the debugger; e.g. `js 'return {w: innerWidth, h: innerHeight}'`. |
 | `screenshot [--format png\|jpeg] [--quality N] [--rect x,y,w,h \| --selector <css> \| --text <s>] [--out <path>] [--tab N]` | Capture the visible viewport, or just a region. `--selector` / `--text` scroll the element into view first, then crop. PNG by default; saved under `<out-dir>`. |
 | `resize [WxH \| preset] [--width N] [--height N] [--left N] [--top N] [--max\|--full\|--min\|--normal] [--tab N]` | Resize/reposition the browser window. Presets: `phone`, `tablet`, `laptop`, `desktop`, `hd`/`1080p`, `half-left`, `half-right`, plus `max`/`full`/`min`. Returns the actual resulting bounds (the OS may clamp). |
+| `zoom [PCT] [--in [PCT] \| --out [PCT] \| --reset] [--tab N]` | Page zoom (like Ctrl +/-), via `chrome.tabs.setZoom`. `zoom 150` sets 150%; `--in`/`--out` step relative (default 10 pts); `--reset` → 100%; no arg reports current. Clamped to ~25–500%. |
 | `get <url>` | Open the URL, wait for load, dump |
 | `wait [seconds]` | Client-side sleep, default 1 |
 | `help` | (REPL only) show command list |
@@ -165,6 +176,17 @@ Every request has an `id`; the matching response echoes it. Requests (server →
 { "id": "...", "type": "dump",     "tabId": 123 }                 // tabId optional → active tab
 { "id": "...", "type": "screenshot", "format": "png", "quality": 85, "tabId": 123 }   // visible viewport
 // crop options (any one): "rect": { "x","y","width","height" }, "selector": "<css>", "text": "<s>"
+{ "id": "...", "type": "mouse_move",  "x": 400, "y": 300 }                 // viewport CSS px; optional shift/ctrl/alt/meta
+// relative nudge: { "type": "mouse_move", "dx": -10, "dy": 0 }  (from the last cursor position)
+{ "id": "...", "type": "mouse_click", "x": 400, "y": 300, "button": "left", "count": 1, "waitForLoad": false }
+{ "id": "...", "type": "mouse_down",  "x": 400, "y": 300, "button": "left" }   // x/y optional → last cursor pos
+{ "id": "...", "type": "mouse_up",    "x": 400, "y": 300, "button": "left" }
+{ "id": "...", "type": "mouse_drag",  "x1": 100, "y1": 100, "x2": 400, "y2": 300, "steps": 10, "button": "left" }
+{ "id": "...", "type": "mouse_hide" }                       // remove the visible cursor overlay
+// any mouse_* accepts "cursor": false to suppress the visible-cursor overlay
+{ "id": "...", "type": "zoom",        "percent": 150 }     // or "delta": +10 / -10, "reset": true; omit all → report
+
+// mouse_* go through CDP Input.dispatchMouseEvent (real, trusted events) — auto-attaches the debugger (shows the banner)
 ```
 
 Responses (extension → server):
@@ -187,6 +209,10 @@ Responses (extension → server):
 { "id": "...", "type": "dump_result",  "tabId": 123, "url": "...", "title": "...", "html": "<!DOCTYPE html>..." }
 { "id": "...", "type": "screenshot_result", "tabId": 123, "url": "...", "title": "...", "format": "png", "dataUrl": "data:image/png;base64,...", "rect": null }
             // "rect" is the CSS-px region that was cropped, or null for full viewport
+{ "id": "...", "type": "mouse_moved",   "tabId": 123, "x": 400, "y": 300, "target": { "tag", "id", "cls", "href", "text" } }
+{ "id": "...", "type": "mouse_clicked", "tabId": 123, "x": 400, "y": 300, "button": "left", "count": 1, "target": { … } }
+{ "id": "...", "type": "mouse_dragged", "tabId": 123, "from": { "x","y" }, "to": { "x","y" }, "button": "left", "steps": 10 }
+{ "id": "...", "type": "zoomed",        "tabId": 123, "percent": 150, "factor": 1.5 }
 { "id": "...", "type": "error",        "error": "..." }
 ```
 

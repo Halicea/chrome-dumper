@@ -147,8 +147,10 @@ async function dumpHtml(tabId) {
 async function handle(msg) {
   const id = msg.id ?? null;
   try {
-    // Delegate debug_* commands to the CDP module (extension/debugger.js).
-    if (typeof msg.type === "string" && msg.type.startsWith("debug_") &&
+    // Delegate debug_* and mouse_* commands to the CDP module (extension/debugger.js).
+    // Mouse input goes through CDP (Input.dispatchMouseEvent) for real, trusted
+    // coordinate-based events, so it lives in the same module.
+    if (typeof msg.type === "string" && (msg.type.startsWith("debug_") || msg.type.startsWith("mouse_")) &&
         self.debugModule && typeof self.debugModule.handleDebugCommand === "function") {
       const r = await self.debugModule.handleDebugCommand(msg, getTargetTab);
       if (r) return reply({ id, ...r });
@@ -1047,6 +1049,32 @@ async function handle(msg) {
             state: win.state,
             width: win.width, height: win.height, left: win.left, top: win.top,
           });
+        } catch (e) {
+          return reply({ id, type: "error", error: String(e?.message || e) });
+        }
+      }
+
+      case "zoom": {
+        // Page zoom (like Ctrl +/-), via chrome.tabs.setZoom. factor 1.0 = 100%.
+        //   { type:"zoom", tabId?, percent?: 150, delta?: +10/-10, reset?: true }
+        // No fields → report current zoom only.
+        const tab = await getTargetTab(msg);
+        if (!tab) return reply({ id, type: "error", error: "no_tab" });
+        try {
+          const current = await chrome.tabs.getZoom(tab.id); // factor, e.g. 1.0
+          let factor = current;
+          if (msg.reset) factor = 1;
+          else if (msg.percent != null) factor = Number(msg.percent) / 100;
+          else if (msg.delta != null) factor = current + Number(msg.delta) / 100;
+          if (!Number.isFinite(factor)) return reply({ id, type: "error", error: "bad zoom value" });
+          // Chrome clamps to roughly 25%–500%.
+          factor = Math.max(0.25, Math.min(5, factor));
+          const changed = !msg.reset && msg.percent == null && msg.delta == null
+            ? false : true;
+          if (changed) await chrome.tabs.setZoom(tab.id, factor);
+          const result = await chrome.tabs.getZoom(tab.id);
+          return reply({ id, type: "zoomed", tabId: tab.id,
+            percent: Math.round(result * 100), factor: result });
         } catch (e) {
           return reply({ id, type: "error", error: String(e?.message || e) });
         }

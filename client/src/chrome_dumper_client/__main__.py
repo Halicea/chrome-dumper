@@ -147,6 +147,44 @@ def _build_parser(for_repl: bool = False) -> _Parser:
     s.add_argument("--tab", type=int)
     s.add_argument("--wait", action="store_true", help="wait for page load (use when click triggers navigation)")
 
+    # Coordinate-based mouse (CDP Input.dispatchMouseEvent) — click/move where you
+    # "see" in a screenshot. Coords are viewport CSS px (same space as screenshot).
+    s = sub.add_parser("mouse-move", help="move the cursor to x y (viewport CSS px)")
+    s.add_argument("x", type=float); s.add_argument("y", type=float)
+    for f in ("--shift", "--ctrl", "--alt", "--meta"):
+        s.add_argument(f, action="store_true")
+    s.add_argument("--tab", type=int)
+
+    s = sub.add_parser("mouse-click", help="click at x y (viewport CSS px)")
+    s.add_argument("x", type=float); s.add_argument("y", type=float)
+    s.add_argument("--button", choices=["left", "right", "middle"], default="left")
+    s.add_argument("--count", type=int, default=1, help="2=double, 3=triple click")
+    s.add_argument("--double", dest="count", action="store_const", const=2, help="double-click (alias for --count 2)")
+    for f in ("--shift", "--ctrl", "--alt", "--meta"):
+        s.add_argument(f, action="store_true")
+    s.add_argument("--wait", action="store_true", help="wait for load if the click navigates")
+    s.add_argument("--tab", type=int)
+
+    s = sub.add_parser("mouse-drag", help="drag from x1 y1 to x2 y2 (viewport CSS px)")
+    s.add_argument("x1", type=float); s.add_argument("y1", type=float)
+    s.add_argument("x2", type=float); s.add_argument("y2", type=float)
+    s.add_argument("--steps", type=int, default=10)
+    s.add_argument("--button", choices=["left", "right", "middle"], default="left")
+    s.add_argument("--tab", type=int)
+
+    # Directional cursor nudges, relative to the current position.
+    # Default step is "fine"; --less = tiny, --more = big; an explicit N overrides.
+    for _dir in ("up", "down", "left", "right"):
+        s = sub.add_parser(f"mouse-{_dir}", help=f"nudge the cursor {_dir} (relative); --less/--more change step")
+        s.add_argument("pixels", nargs="?", type=float, help="explicit step in CSS px (overrides --less/--more)")
+        g = s.add_mutually_exclusive_group()
+        g.add_argument("--less", action="store_true", help="tiny step (1px)")
+        g.add_argument("--more", action="store_true", help="big step (100px)")
+        s.add_argument("--tab", type=int)
+
+    s = sub.add_parser("mouse-hide", help="remove the visible cursor overlay")
+    s.add_argument("--tab", type=int)
+
     s = sub.add_parser("wait", help="sleep N seconds (default 1)")
     s.add_argument("seconds", nargs="?", type=float, default=1.0)
 
@@ -241,6 +279,10 @@ def _build_parser(for_repl: bool = False) -> _Parser:
     s.add_argument("tabs", nargs="*", type=int, help="tab ids (overrides --tab)")
     s = sub.add_parser("get");  s.add_argument("url")
 
+    s = sub.add_parser("js", help="run JS in the page via CDP (async IIFE; `return` a JSON value). Attaches the debugger.")
+    s.add_argument("code", help="JS body, e.g. 'return {w: innerWidth, h: innerHeight}'")
+    s.add_argument("--tab", type=int)
+
     s = sub.add_parser("resize", help="resize/reposition the browser window")
     s.add_argument("size", nargs="?",
                    help="WxH (e.g. 1280x800) or a preset: " + ", ".join(_RESIZE_PRESETS))
@@ -256,6 +298,16 @@ def _build_parser(for_repl: bool = False) -> _Parser:
                    help="minimize the window")
     s.add_argument("--normal", dest="state", action="store_const", const="normal",
                    help="restore to a normal window")
+    s.add_argument("--tab", type=int)
+
+    s = sub.add_parser("zoom", help="page zoom (like Ctrl +/-); no arg reports current zoom")
+    s.add_argument("percent", nargs="?", type=float, help="absolute zoom percent, e.g. 150")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--in", dest="zoom_in", type=float, nargs="?", const=10.0,
+                   metavar="PCT", help="zoom in by PCT points from current (default 10)")
+    g.add_argument("--out", dest="zoom_out", type=float, nargs="?", const=10.0,
+                   metavar="PCT", help="zoom out by PCT points from current (default 10)")
+    g.add_argument("--reset", action="store_true", help="reset to 100%%")
     s.add_argument("--tab", type=int)
 
     # CDP / Chrome Debugger Protocol commands (separate module).
@@ -294,6 +346,15 @@ _HELP = """commands:
   click [--selector <css> | --text <s>] [--nth N] [--tab N] [--wait]
                                no target → click the currently focused element
                                --wait if the click navigates and you need the load to complete
+  mouse-move <x> <y> [--tab N]         move the cursor to viewport coords (CSS px, as in a screenshot)
+  mouse-click <x> <y> [--button left|right|middle] [--count N | --double] [--wait] [--tab N]
+                               real, trusted click at viewport coords (move → press → release)
+  mouse-drag <x1> <y1> <x2> <y2> [--steps N] [--button B] [--tab N]
+  mouse-up|down|left|right [N] [--less | --more] [--tab N]
+                               nudge the cursor in a direction, relative to its current
+                               position; default 10px, --less 1px, --more 100px, or explicit N
+  mouse-hide [--tab N]         remove the visible cursor overlay
+                               (mouse-* draw a teal ring at the cursor so you can see it)
   wait [seconds]               sleep client-side; default 1.0
   select --selector <css> | --text <s> | --rect x1,y1,x2,y2 | --from <css> --to <css>
                                [--no-mouse] [--no-scroll] [--no-focus] [--tab N]
@@ -319,8 +380,11 @@ _HELP = """commands:
              [--rect x,y,w,h | --selector <css> | --text <s>]
              [--out <path>] [--tab N]
                                capture visible viewport (or a region); save under out-dir
+  zoom [PCT] [--in [PCT] | --out [PCT] | --reset] [--tab N]
+                               page zoom (like Ctrl +/-); no arg reports current zoom
   close [--tab N | <id> ...]   close active tab, one id, or many
   get  <url>                   open + dump in one shot
+  js  '<code>' [--tab N]        run JS in the page via CDP (async; `return` a JSON value)
   help                         show this
   quit | exit | Ctrl-D         leave the REPL
 """
@@ -368,6 +432,22 @@ def _dispatch(args: argparse.Namespace, d: DumperClient, out_dir: Path) -> None:
     elif args.cmd == "click":
         print(json.dumps(d.click(selector=args.selector, text=args.text, nth=args.nth,
                                  tab_id=args.tab, wait=args.wait), indent=2))
+    elif args.cmd == "mouse-move":
+        print(json.dumps(d.mouse_move(args.x, args.y, shift=args.shift, ctrl=args.ctrl,
+                                      alt=args.alt, meta=args.meta, tab_id=args.tab), indent=2))
+    elif args.cmd == "mouse-click":
+        print(json.dumps(d.mouse_click(args.x, args.y, button=args.button, count=args.count,
+                                       shift=args.shift, ctrl=args.ctrl, alt=args.alt,
+                                       meta=args.meta, wait=args.wait, tab_id=args.tab), indent=2))
+    elif args.cmd == "mouse-drag":
+        print(json.dumps(d.mouse_drag(args.x1, args.y1, args.x2, args.y2,
+                                      steps=args.steps, button=args.button, tab_id=args.tab), indent=2))
+    elif args.cmd in ("mouse-up", "mouse-down", "mouse-left", "mouse-right"):
+        direction = args.cmd.split("-", 1)[1]
+        step = args.pixels if args.pixels is not None else (1.0 if args.less else 100.0 if args.more else 10.0)
+        print(json.dumps(d.mouse_nudge(direction, step, tab_id=args.tab), indent=2))
+    elif args.cmd == "mouse-hide":
+        print(json.dumps(d.mouse_hide(tab_id=args.tab), indent=2))
     elif args.cmd == "wait":
         time.sleep(max(0.0, args.seconds))
     elif args.cmd == "key":
@@ -454,6 +534,20 @@ def _dispatch(args: argparse.Namespace, d: DumperClient, out_dir: Path) -> None:
         print(f"wrote {path}  ({len(resp['html'])} bytes)  url={resp.get('url')}")
     elif args.cmd == "resize":
         print(json.dumps(d.resize(**_parse_resize(args)), indent=2))
+    elif args.cmd == "zoom":
+        if args.reset:
+            out = d.zoom(reset=True, tab_id=args.tab)
+        elif args.zoom_in is not None:
+            out = d.zoom(delta=args.zoom_in, tab_id=args.tab)
+        elif args.zoom_out is not None:
+            out = d.zoom(delta=-args.zoom_out, tab_id=args.tab)
+        elif args.percent is not None:
+            out = d.zoom(args.percent, tab_id=args.tab)
+        else:
+            out = d.zoom(tab_id=args.tab)  # report only
+        print(json.dumps(out, indent=2))
+    elif args.cmd == "js":
+        print(json.dumps(d.js(args.code, tab_id=args.tab), indent=2))
     elif args.cmd == "get":
         opened = d.open(args.url, wait=True)
         resp = d.dump(tab_id=opened["tabId"])
@@ -471,6 +565,14 @@ _COMMANDS: dict[str, list[str]] = {
     "open": ["--no-wait"],
     "nav": ["--tab", "--no-wait"],
     "click": ["--selector", "--text", "--nth", "--tab", "--no-wait"],
+    "mouse-move": ["--shift", "--ctrl", "--alt", "--meta", "--tab"],
+    "mouse-click": ["--button", "--count", "--double", "--shift", "--ctrl", "--alt", "--meta", "--wait", "--tab"],
+    "mouse-drag": ["--steps", "--button", "--tab"],
+    "mouse-up": ["--less", "--more", "--tab"],
+    "mouse-down": ["--less", "--more", "--tab"],
+    "mouse-left": ["--less", "--more", "--tab"],
+    "mouse-right": ["--less", "--more", "--tab"],
+    "mouse-hide": ["--tab"],
     "dump": ["--tab"],
     "screenshot": ["--format", "--quality", "--rect", "--selector", "--text", "--out", "--tab"],
     "close": ["--tab"],
@@ -489,7 +591,9 @@ _COMMANDS: dict[str, list[str]] = {
     "clear-highlights": ["--tab"],
     "resize": ["--width", "--height", "--left", "--top", "--max", "--full",
                "--min", "--normal", "--tab"],
+    "zoom": ["--in", "--out", "--reset", "--tab"],
     "get": [],
+    "js": ["--tab"],
     "save": [],
     "load": [],
     "clear": [],

@@ -10,7 +10,72 @@
 
 const CDP_VERSION = "1.3";
 const attached = new Map(); // tabId -> { network: bool, fetch: bool, console: bool, paused: Map<requestId, {url, method, resourceType}> }
+const lastMouse = new Map(); // tabId -> { x, y }  last known cursor position (CSS px, viewport-relative)
 let _listenerInstalled = false;
+
+// CDP modifier bitmask: Alt=1, Ctrl=2, Meta/Cmd=4, Shift=8.
+function _modifiers(msg) {
+  let m = 0;
+  if (msg.alt) m |= 1;
+  if (msg.ctrl) m |= 2;
+  if (msg.meta) m |= 4;
+  if (msg.shift) m |= 8;
+  return m;
+}
+
+// CDP `buttons` bitmask for a held button: left=1, right=2, middle=4.
+function _buttonsMask(button) {
+  return button === "right" ? 2 : button === "middle" ? 4 : 1;
+}
+
+// Draw a visible cursor overlay at (x, y) in the page so a human watching can
+// see where the synthetic CDP cursor is (CDP input moves a *virtual* pointer
+// that the browser doesn't render). On `clicked`, add a quick expanding ripple.
+// Best-effort — never throws, never blocks the actual input.
+function _cursorExpr(x, y, clicked) {
+  const cl = clicked ? "true" : "false";
+  return "(() => { const ID='__dumper_cursor__';" +
+    " let c=document.getElementById(ID);" +
+    " if(!c){ c=document.createElement('div'); c.id=ID;" +
+    "  c.style.cssText='position:fixed;top:0;left:0;width:18px;height:18px;margin:-9px 0 0 -9px;" +
+    "border:2px solid #00e5ff;border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.45),0 0 6px rgba(0,229,255,.85);" +
+    "background:rgba(0,229,255,.15);pointer-events:none;z-index:2147483647;transition:transform .04s linear;will-change:transform;';" +
+    "  const d=document.createElement('div');" +
+    "  d.style.cssText='position:absolute;top:50%;left:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;background:#00e5ff;border-radius:50%;';" +
+    "  c.appendChild(d); (document.body||document.documentElement).appendChild(c); }" +
+    " c.style.transform='translate(' + (" + x + ") + 'px,' + (" + y + ") + 'px)';" +
+    " if(" + cl + "){ const r=document.createElement('div');" +
+    "  r.style.cssText='position:fixed;top:0;left:0;width:14px;height:14px;margin:-7px 0 0 -7px;" +
+    "border:2px solid #ff1744;border-radius:50%;pointer-events:none;z-index:2147483647;opacity:.9;" +
+    "transition:transform .35s ease-out,opacity .35s ease-out;';" +
+    "  r.style.transform='translate(' + (" + x + ") + 'px,' + (" + y + ") + 'px) scale(1)';" +
+    "  (document.body||document.documentElement).appendChild(r);" +
+    "  requestAnimationFrame(()=>{ r.style.transform='translate(' + (" + x + ") + 'px,' + (" + y + ") + 'px) scale(3)'; r.style.opacity='0'; });" +
+    "  setTimeout(()=>r.remove(),420); } })()";
+}
+
+async function _drawCursor(tabId, x, y, clicked) {
+  try {
+    await _sendCommand(tabId, "Runtime.evaluate", { expression: _cursorExpr(x, y, clicked) });
+  } catch (e) { /* overlay is cosmetic; ignore failures */ }
+}
+
+// Report what's under (x, y) so the caller can confirm the click landed where it
+// meant to. Uses Runtime.evaluate (no domain enable needed) in the page realm.
+async function _elementAt(tabId, x, y) {
+  try {
+    const expr =
+      "(() => { const el = document.elementFromPoint(" + x + ", " + y + ");" +
+      " if (!el) return null;" +
+      " const cls = typeof el.className === 'string' ? el.className : null;" +
+      " return { tag: el.tagName.toLowerCase(), id: el.id || null, cls: cls || null," +
+      " href: el.href || null, text: (el.innerText || el.value || '').trim().slice(0, 120) }; })()";
+    const r = await _sendCommand(tabId, "Runtime.evaluate", { expression: expr, returnByValue: true });
+    return r && r.result ? r.result.value : null;
+  } catch (e) {
+    return null;
+  }
+}
 
 function _state(tabId) {
   let s = attached.get(tabId);
@@ -169,6 +234,141 @@ async function handleDebugCommand(msg, getTargetTab) {
         return { type: "error", error: `eval_failed: ${e.message || e}` };
       }
     }
+    case "mouse_move": {
+      // Move the (virtual) cursor to viewport CSS-px coords. Fires a real,
+      // trusted mousemove via CDP, so :hover and page mousemove handlers react.
+      // Absolute: pass x,y. Relative: pass dx and/or dy (added to the last known
+      // cursor position) — used by the directional nudge commands.
+      //   { type:"mouse_move", tabId?, x, y | dx, dy, shift?, ctrl?, alt?, meta? }
+      const tab = await getTargetTab(msg);
+      if (!tab) return { type: "error", error: "no_tab" };
+      const relative = msg.dx != null || msg.dy != null;
+      const prev = lastMouse.get(tab.id) || { x: 0, y: 0 };
+      let x, y;
+      if (relative) {
+        x = Math.max(0, prev.x + Number(msg.dx || 0));
+        y = Math.max(0, prev.y + Number(msg.dy || 0));
+      } else {
+        x = Number(msg.x); y = Number(msg.y);
+      }
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return { type: "error", error: "missing x/y (numbers, viewport CSS px) or dx/dy" };
+      try {
+        await _attach(tab.id, { network: false }); // idempotent; just need the debugger session
+        await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
+          type: "mouseMoved", x, y, button: "none", buttons: 0, modifiers: _modifiers(msg),
+        });
+        lastMouse.set(tab.id, { x, y });
+        if (msg.cursor !== false) await _drawCursor(tab.id, x, y, false);
+        const target = await _elementAt(tab.id, x, y);
+        return { type: "mouse_moved", tabId: tab.id, x, y, target };
+      } catch (e) {
+        return { type: "error", error: `mouse_move_failed: ${e.message || e}` };
+      }
+    }
+
+    case "mouse_click": {
+      // Click at viewport CSS-px coords with a real, trusted gesture: move →
+      // press → release. button: left|right|middle (default left); count for
+      // double/triple click. waitForLoad waits if the click navigates.
+      //   { type:"mouse_click", tabId?, x, y, button?, count?, waitForLoad?, shift?,… }
+      const tab = await getTargetTab(msg);
+      if (!tab) return { type: "error", error: "no_tab" };
+      const x = Number(msg.x), y = Number(msg.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return { type: "error", error: "missing x/y (numbers, viewport CSS px)" };
+      const button = msg.button === "right" || msg.button === "middle" ? msg.button : "left";
+      const count = Number.isFinite(Number(msg.count)) && Number(msg.count) >= 1 ? Number(msg.count) : 1;
+      const mods = _modifiers(msg);
+      try {
+        await _attach(tab.id, { network: false });
+        await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
+          type: "mouseMoved", x, y, button: "none", buttons: 0, modifiers: mods,
+        });
+        if (msg.cursor !== false) await _drawCursor(tab.id, x, y, false);
+        const target = await _elementAt(tab.id, x, y); // capture before the click navigates
+        await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
+          type: "mousePressed", x, y, button, buttons: _buttonsMask(button), clickCount: count, modifiers: mods,
+        });
+        await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
+          type: "mouseReleased", x, y, button, buttons: 0, clickCount: count, modifiers: mods,
+        });
+        lastMouse.set(tab.id, { x, y });
+        if (msg.cursor !== false) await _drawCursor(tab.id, x, y, true);
+        if (msg.waitForLoad && typeof waitForComplete === "function") await waitForComplete(tab.id);
+        return { type: "mouse_clicked", tabId: tab.id, x, y, button, count, target };
+      } catch (e) {
+        return { type: "error", error: `mouse_click_failed: ${e.message || e}` };
+      }
+    }
+
+    case "mouse_down":
+    case "mouse_up": {
+      // Press or release a button at coords without the paired event — for
+      // building custom gestures. Updates lastMouse.
+      const tab = await getTargetTab(msg);
+      if (!tab) return { type: "error", error: "no_tab" };
+      const prev = lastMouse.get(tab.id) || { x: 0, y: 0 };
+      const x = Number.isFinite(Number(msg.x)) ? Number(msg.x) : prev.x;
+      const y = Number.isFinite(Number(msg.y)) ? Number(msg.y) : prev.y;
+      const button = msg.button === "right" || msg.button === "middle" ? msg.button : "left";
+      const down = msg.type === "mouse_down";
+      try {
+        await _attach(tab.id, { network: false });
+        await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
+          type: down ? "mousePressed" : "mouseReleased",
+          x, y, button, buttons: down ? _buttonsMask(button) : 0, clickCount: 1, modifiers: _modifiers(msg),
+        });
+        lastMouse.set(tab.id, { x, y });
+        if (msg.cursor !== false) await _drawCursor(tab.id, x, y, down);
+        return { type: down ? "mouse_pressed" : "mouse_released", tabId: tab.id, x, y, button };
+      } catch (e) {
+        return { type: "error", error: `mouse_${down ? "down" : "up"}_failed: ${e.message || e}` };
+      }
+    }
+
+    case "mouse_hide": {
+      // Remove the visible cursor overlay (cosmetic only).
+      const tab = await getTargetTab(msg);
+      if (!tab) return { type: "error", error: "no_tab" };
+      try {
+        await _attach(tab.id, { network: false });
+        await _sendCommand(tab.id, "Runtime.evaluate", {
+          expression: "(()=>{const e=document.getElementById('__dumper_cursor__');if(e)e.remove();})()",
+        });
+        return { type: "mouse_hidden", tabId: tab.id };
+      } catch (e) {
+        return { type: "error", error: `mouse_hide_failed: ${e.message || e}` };
+      }
+    }
+
+    case "mouse_drag": {
+      // Press at (x1,y1), move to (x2,y2) in steps, release. Real drag gesture.
+      //   { type:"mouse_drag", tabId?, x1, y1, x2, y2, steps?, button? }
+      const tab = await getTargetTab(msg);
+      if (!tab) return { type: "error", error: "no_tab" };
+      const x1 = Number(msg.x1), y1 = Number(msg.y1), x2 = Number(msg.x2), y2 = Number(msg.y2);
+      if (![x1, y1, x2, y2].every(Number.isFinite)) return { type: "error", error: "missing x1/y1/x2/y2" };
+      const button = msg.button === "right" || msg.button === "middle" ? msg.button : "left";
+      const steps = Number.isFinite(Number(msg.steps)) && Number(msg.steps) >= 1 ? Number(msg.steps) : 10;
+      const mods = _modifiers(msg);
+      const mask = _buttonsMask(button);
+      try {
+        await _attach(tab.id, { network: false });
+        await _sendCommand(tab.id, "Input.dispatchMouseEvent", { type: "mouseMoved", x: x1, y: y1, button: "none", buttons: 0, modifiers: mods });
+        await _sendCommand(tab.id, "Input.dispatchMouseEvent", { type: "mousePressed", x: x1, y: y1, button, buttons: mask, clickCount: 1, modifiers: mods });
+        for (let i = 1; i <= steps; i++) {
+          const x = x1 + ((x2 - x1) * i) / steps;
+          const y = y1 + ((y2 - y1) * i) / steps;
+          await _sendCommand(tab.id, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button, buttons: mask, modifiers: mods });
+        }
+        await _sendCommand(tab.id, "Input.dispatchMouseEvent", { type: "mouseReleased", x: x2, y: y2, button, buttons: 0, clickCount: 1, modifiers: mods });
+        lastMouse.set(tab.id, { x: x2, y: y2 });
+        if (msg.cursor !== false) await _drawCursor(tab.id, x2, y2, true);
+        return { type: "mouse_dragged", tabId: tab.id, from: { x: x1, y: y1 }, to: { x: x2, y: y2 }, button, steps };
+      } catch (e) {
+        return { type: "error", error: `mouse_drag_failed: ${e.message || e}` };
+      }
+    }
+
     case "debug_pause_continue": {
       // action: "continue" (default) | "fail" | "fulfill"
       const tab = await getTargetTab(msg);

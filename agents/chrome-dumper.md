@@ -57,6 +57,12 @@ to pick which connected browser to act on.
 | `nav <url> [--tab N] [--no-wait]` | navigate an existing tab (active by default) |
 | `close [--tab N | <id>…]` | close active / specific tab(s) |
 | `click [--selector <css> | --text <s>] [--nth N] [--tab N] [--wait]` | click; no target → focused element; `--wait` only if the click navigates |
+| `mouse-move <x> <y> [--tab N]` | move the cursor to viewport coords (CSS px, same space as `screenshot`); real `mousemove` (triggers `:hover`), reports the element under it |
+| `mouse-click <x> <y> [--button left\|right\|middle] [--count N \| --double] [--wait] [--tab N]` | real, trusted click at viewport coords (move → press → release) |
+| `mouse-drag <x1> <y1> <x2> <y2> [--steps N] [--button B] [--tab N]` | press at p1, move to p2, release |
+| `mouse-up\|down\|left\|right [N] [--less\|--more] [--tab N]` | nudge the cursor in a direction, relative to its current position; default 10px, `--less` 1px, `--more` 100px, or explicit N |
+| `mouse-hide [--tab N]` | remove the visible cursor overlay that `mouse-*` draws (a teal ring + click ripple) |
+| `js '<code>' [--tab N]` | run JS in the page via CDP (async; `return` a JSON value), e.g. `js 'return {w: innerWidth, h: innerHeight}'` |
 | `type <value> [--selector|--placeholder|--label] [--no-clear] [--submit] [--wait] [--tab N]` | type into a field; `--submit` presses Enter |
 | `key <Name> [--shift|--ctrl|--alt|--meta] [--selector <css>] [--wait]` | press a key (`Enter`, `Escape`, `ArrowDown`, …). `Tab`/`tab` does focus traversal |
 | `select --selector|--text|--rect x1,y1,x2,y2|--from <css> --to <css>` | select text via the Selection API |
@@ -65,6 +71,7 @@ to pick which connected browser to act on.
 | `dump [--tab N]` | dump live DOM to `client/dumps/<tabId>_<title>.html` |
 | `screenshot [--rect|--selector|--text] [--out <path>] [--tab N]` | capture viewport / region |
 | `resize [WxH|preset] [--max|--full|--min] [--tab N]` | resize the window; presets: `phone`/`tablet`/`laptop`/`desktop`/`hd`, `half-left`/`half-right` |
+| `zoom [PCT] [--in [PCT]|--out [PCT]|--reset] [--tab N]` | page zoom (like Ctrl +/-); `zoom 150` = 150%, `--in`/`--out` step ±10 pts, `--reset` = 100%, no arg reports current |
 | `get <url>` | open + wait + dump in one shot |
 | `wait [seconds]` | client-side sleep (default 1) |
 
@@ -79,6 +86,33 @@ to pick which connected browser to act on.
   (strips scripts/styles/tags), or your own parsing.
 - For SPAs / lazy content, give the page a moment after `nav`/`click`:
   `uv run dumper wait 2` (or `sleep 2`) before dumping.
+
+## Clicking by description (visual click)
+
+When the caller asks you to click something by how it *looks* or *where it is*
+("the Edit JD button in the top-right", "the blue Save button") and you can't
+pin it down with a `--selector`/`--text`, locate it visually — **you** are the
+vision model, so no extra service is needed:
+
+1. `uv run dumper screenshot --tab N` → note the saved PNG path. Only the
+   **active/visible viewport** is captured; if the target may be off-screen,
+   `scroll` it into view first.
+2. **Read the PNG** and find the target element in the image.
+3. Read the viewport size:
+   `uv run dumper js 'return {w: window.innerWidth, h: window.innerHeight}' --tab N`.
+4. Estimate the element's centre as a fraction of the image — `fx` across
+   (0=left, 1=right), `fy` down (0=top, 1=bottom) — then convert to CSS px:
+   `x = fx * w`, `y = fy * h`. (Working in fractions sidesteps device-pixel-ratio
+   scaling: the image and the viewport share the same fractions.)
+5. `uv run dumper mouse-click <x> <y> --tab N` (add `--wait` if it navigates).
+   `mouse-click` replies with the element it landed on (`target.tag/text/href`) —
+   check it matches before moving on; re-`screenshot` to confirm the result.
+6. If you're slightly off, nudge with `mouse-move <x> <y>` then
+   `mouse-up/down/left/right [--less|--more]` and re-check, or just recompute and
+   click again.
+
+`mouse-*` events go through the Chrome debugger (CDP), so the "being debugged"
+banner appears while you use them; run `uv run dumper detach --tab N` to clear it.
 
 ## Acting on a page
 

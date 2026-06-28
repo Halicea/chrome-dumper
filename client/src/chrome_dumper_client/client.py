@@ -120,6 +120,74 @@ class DumperClient:
             p["tabId"] = tab_id
         return self._cmd(p)
 
+    def mouse_move(self, x: Optional[float] = None, y: Optional[float] = None, *,
+                   dx: Optional[float] = None, dy: Optional[float] = None,
+                   shift: bool = False, ctrl: bool = False,
+                   alt: bool = False, meta: bool = False, tab_id: Optional[int] = None) -> dict:
+        """Move the virtual cursor. Absolute: pass ``x``/``y`` (viewport CSS px,
+        as seen in a screenshot). Relative: pass ``dx``/``dy`` to nudge from the
+        last cursor position. Fires a real, trusted mousemove via CDP — triggers
+        :hover. Returns the element currently under the cursor."""
+        p: dict = {"type": "mouse_move", "shift": shift, "ctrl": ctrl, "alt": alt, "meta": meta}
+        if dx is not None or dy is not None:
+            p["dx"] = dx or 0
+            p["dy"] = dy or 0
+        else:
+            p["x"] = x
+            p["y"] = y
+        if tab_id is not None: p["tabId"] = tab_id
+        return self._cmd(p)
+
+    def mouse_hide(self, *, tab_id: Optional[int] = None) -> dict:
+        """Remove the visible cursor overlay drawn by the mouse commands."""
+        p: dict = {"type": "mouse_hide"}
+        if tab_id is not None: p["tabId"] = tab_id
+        return self._cmd(p)
+
+    def mouse_nudge(self, direction: str, step: float, *, tab_id: Optional[int] = None) -> dict:
+        """Move the cursor ``step`` CSS px in a direction (up/down/left/right)
+        relative to its current position."""
+        dx = {"left": -step, "right": step}.get(direction, 0)
+        dy = {"up": -step, "down": step}.get(direction, 0)
+        return self.mouse_move(dx=dx, dy=dy, tab_id=tab_id)
+
+    def mouse_click(self, x: float, y: float, *, button: str = "left", count: int = 1,
+                    shift: bool = False, ctrl: bool = False, alt: bool = False,
+                    meta: bool = False, wait: bool = False, tab_id: Optional[int] = None) -> dict:
+        """Click at viewport coords (CSS px) with a real, trusted gesture
+        (move → press → release). ``button`` is left|right|middle; ``count`` for
+        double/triple click. ``wait`` waits for load if the click navigates."""
+        p: dict = {"type": "mouse_click", "x": x, "y": y, "button": button, "count": count,
+                   "shift": shift, "ctrl": ctrl, "alt": alt, "meta": meta, "waitForLoad": wait}
+        if tab_id is not None: p["tabId"] = tab_id
+        return self._cmd(p)
+
+    def mouse_down(self, x: Optional[float] = None, y: Optional[float] = None, *,
+                   button: str = "left", tab_id: Optional[int] = None) -> dict:
+        """Press a mouse button (no release). Omit x/y to use the last cursor position."""
+        p: dict = {"type": "mouse_down", "button": button}
+        if x is not None: p["x"] = x
+        if y is not None: p["y"] = y
+        if tab_id is not None: p["tabId"] = tab_id
+        return self._cmd(p)
+
+    def mouse_up(self, x: Optional[float] = None, y: Optional[float] = None, *,
+                 button: str = "left", tab_id: Optional[int] = None) -> dict:
+        """Release a mouse button (no prior press). Omit x/y to use the last cursor position."""
+        p: dict = {"type": "mouse_up", "button": button}
+        if x is not None: p["x"] = x
+        if y is not None: p["y"] = y
+        if tab_id is not None: p["tabId"] = tab_id
+        return self._cmd(p)
+
+    def mouse_drag(self, x1: float, y1: float, x2: float, y2: float, *, steps: int = 10,
+                   button: str = "left", tab_id: Optional[int] = None) -> dict:
+        """Drag from (x1,y1) to (x2,y2) in viewport coords: press, move in steps, release."""
+        p: dict = {"type": "mouse_drag", "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                   "steps": steps, "button": button}
+        if tab_id is not None: p["tabId"] = tab_id
+        return self._cmd(p)
+
     def key(self, key: str, *, shift: bool = False, ctrl: bool = False,
             alt: bool = False, meta: bool = False, selector: Optional[str] = None,
             wait: bool = False, tab_id: Optional[int] = None) -> dict:
@@ -231,6 +299,19 @@ class DumperClient:
         if top is not None: p["top"] = top
         if state: p["state"] = state
         if half: p["half"] = half
+        if tab_id is not None: p["tabId"] = tab_id
+        return self._cmd(p)
+
+    def zoom(self, percent: Optional[float] = None, *, delta: Optional[float] = None,
+             reset: bool = False, tab_id: Optional[int] = None) -> dict:
+        """Page zoom (like Ctrl +/-). ``percent`` sets an absolute level (150 =
+        150%); ``delta`` steps relative to the current level (+10 / -10);
+        ``reset`` returns to 100%. With no argument, just reports the current
+        zoom. Returns ``{percent, factor}``."""
+        p: dict = {"type": "zoom"}
+        if reset: p["reset"] = True
+        elif percent is not None: p["percent"] = percent
+        elif delta is not None: p["delta"] = delta
         if tab_id is not None: p["tabId"] = tab_id
         return self._cmd(p)
 

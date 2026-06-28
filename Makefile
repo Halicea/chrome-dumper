@@ -1,4 +1,4 @@
-.PHONY: help sync server client repl chrome clean clean-chrome install-agent
+.PHONY: help sync server client repl chrome restage clean clean-chrome install-agent
 
 CHROME ?= $(shell command -v google-chrome 2>/dev/null || command -v google-chrome-stable 2>/dev/null || command -v chromium 2>/dev/null || command -v chromium-browser 2>/dev/null || command -v chrome 2>/dev/null)
 EXT_DIR := $(CURDIR)/extension
@@ -35,6 +35,8 @@ help:
 	@echo "                  (own profile .chrome-profile-<name>; run several at once)"
 	@echo "                  reuse a real Chrome profile with PROFILE_DIR=<user-data-dir> CHROME_PROFILE=<name>"
 	@echo "                  (quit Chrome first; on mac also set CHROME=/path/to/Google Chrome)"
+	@echo "  make restage SESSION=<name> - re-copy extension/ into a running session's"
+	@echo "                  staged copy after editing the extension (then reload it in Chrome)"
 	@echo "  make clean    - remove .venv dirs and dumps/"
 	@echo "  make install-agent - install the chrome-dumper subagent into $(AGENTS_DIR)"
 	@echo "                  (paths in the definition are rewritten to point at this repo)"
@@ -73,6 +75,19 @@ endif
 	    --no-default-browser-check \
 	    --new-window \
 	    "about:blank"
+
+# Re-stage the extension into an already-spawned session's staged copy.
+# `make chrome SESSION=<name>` copies extension/ -> .chrome-stage-<name>/ ONCE at
+# spawn; later edits to extension/ don't reach that browser until re-copied. This
+# refreshes the copy in place (keeping session.json); you still reload the
+# extension in Chrome (chrome://extensions > reload) to pick up the new SW.
+restage:
+	@test -n "$(strip $(SESSION))" || { echo "restage needs SESSION=<name> (the default profile loads extension/ directly — just reload it)"; exit 1; }
+	@test -d "$(CHROME_EXT_DIR)" || { echo "no staged session at $(CHROME_EXT_DIR) — run 'make chrome SESSION=$(SESSION)' first"; exit 1; }
+	@cp -r "$(EXT_DIR)/." "$(CHROME_EXT_DIR)/"
+	@printf '{"name":"%s"}\n' '$(SESSION)' > "$(CHROME_EXT_DIR)/session.json"
+	@echo "restaged extension -> $(CHROME_EXT_DIR)"
+	@echo "now reload it in Chrome: chrome://extensions > reload HTML Dumper"
 
 # Install the subagent definition globally. The committed agents/chrome-dumper.md
 # uses repo-relative commands (`cd client`, `make …`, `client/dumps/`) that only
