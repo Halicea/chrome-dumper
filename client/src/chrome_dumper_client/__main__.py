@@ -149,17 +149,21 @@ def _build_parser(for_repl: bool = False) -> _Parser:
 
     # Coordinate-based mouse (CDP Input.dispatchMouseEvent) — click/move where you
     # "see" in a screenshot. Coords are viewport CSS px (same space as screenshot).
-    s = sub.add_parser("mouse-move", help="move the cursor to x y (viewport CSS px)")
+    s = sub.add_parser("mouse-move", help="move the cursor to x y (viewport CSS px); glides like a real cursor")
     s.add_argument("x", type=float); s.add_argument("y", type=float)
+    s.add_argument("--instant", action="store_true", help="jump instantly instead of gliding")
+    s.add_argument("--duration", type=float, help="glide duration in ms (default scales with distance)")
     for f in ("--shift", "--ctrl", "--alt", "--meta"):
         s.add_argument(f, action="store_true")
     s.add_argument("--tab", type=int)
 
-    s = sub.add_parser("mouse-click", help="click at x y (viewport CSS px)")
+    s = sub.add_parser("mouse-click", help="click at x y (viewport CSS px); glides to the target first")
     s.add_argument("x", type=float); s.add_argument("y", type=float)
     s.add_argument("--button", choices=["left", "right", "middle"], default="left")
     s.add_argument("--count", type=int, default=1, help="2=double, 3=triple click")
     s.add_argument("--double", dest="count", action="store_const", const=2, help="double-click (alias for --count 2)")
+    s.add_argument("--instant", action="store_true", help="jump instantly instead of gliding")
+    s.add_argument("--duration", type=float, help="glide duration in ms (default scales with distance)")
     for f in ("--shift", "--ctrl", "--alt", "--meta"):
         s.add_argument(f, action="store_true")
     s.add_argument("--wait", action="store_true", help="wait for load if the click navigates")
@@ -181,6 +185,16 @@ def _build_parser(for_repl: bool = False) -> _Parser:
         g.add_argument("--less", action="store_true", help="tiny step (1px)")
         g.add_argument("--more", action="store_true", help="big step (100px)")
         s.add_argument("--tab", type=int)
+
+    s = sub.add_parser("mouse-scroll", help="real wheel scroll via CDP at the cursor (scrolls custom containers)")
+    s.add_argument("direction", nargs="?", default="down", choices=["up", "down", "left", "right"])
+    s.add_argument("pixels", nargs="?", type=float, help="wheel delta in px (overrides --less/--more)")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--less", action="store_true", help="small scroll (100px)")
+    g.add_argument("--more", action="store_true", help="big scroll (700px)")
+    s.add_argument("--at", nargs=2, type=float, metavar=("X", "Y"),
+                   help="scroll at this point instead of the current cursor")
+    s.add_argument("--tab", type=int)
 
     s = sub.add_parser("mouse-hide", help="remove the visible cursor overlay")
     s.add_argument("--tab", type=int)
@@ -346,13 +360,18 @@ _HELP = """commands:
   click [--selector <css> | --text <s>] [--nth N] [--tab N] [--wait]
                                no target → click the currently focused element
                                --wait if the click navigates and you need the load to complete
-  mouse-move <x> <y> [--tab N]         move the cursor to viewport coords (CSS px, as in a screenshot)
-  mouse-click <x> <y> [--button left|right|middle] [--count N | --double] [--wait] [--tab N]
-                               real, trusted click at viewport coords (move → press → release)
+  mouse-move <x> <y> [--instant] [--duration MS] [--tab N]
+                               glide the cursor to viewport coords (human-like eased path);
+                               --instant jumps, --duration tunes speed
+  mouse-click <x> <y> [--button left|right|middle] [--count N | --double] [--instant] [--duration MS] [--wait] [--tab N]
+                               real, trusted click — glides to the target, then press → release
   mouse-drag <x1> <y1> <x2> <y2> [--steps N] [--button B] [--tab N]
   mouse-up|down|left|right [N] [--less | --more] [--tab N]
                                nudge the cursor in a direction, relative to its current
                                position; default 10px, --less 1px, --more 100px, or explicit N
+  mouse-scroll [up|down|left|right] [N] [--less | --more] [--at X Y] [--tab N]
+                               real wheel scroll via CDP at the cursor; scrolls custom
+                               containers the JS `scroll` can't; default 300px
   mouse-hide [--tab N]         remove the visible cursor overlay
                                (mouse-* draw a teal ring at the cursor so you can see it)
   wait [seconds]               sleep client-side; default 1.0
@@ -433,10 +452,12 @@ def _dispatch(args: argparse.Namespace, d: DumperClient, out_dir: Path) -> None:
         print(json.dumps(d.click(selector=args.selector, text=args.text, nth=args.nth,
                                  tab_id=args.tab, wait=args.wait), indent=2))
     elif args.cmd == "mouse-move":
-        print(json.dumps(d.mouse_move(args.x, args.y, shift=args.shift, ctrl=args.ctrl,
+        print(json.dumps(d.mouse_move(args.x, args.y, smooth=not args.instant, duration=args.duration,
+                                      shift=args.shift, ctrl=args.ctrl,
                                       alt=args.alt, meta=args.meta, tab_id=args.tab), indent=2))
     elif args.cmd == "mouse-click":
         print(json.dumps(d.mouse_click(args.x, args.y, button=args.button, count=args.count,
+                                       smooth=not args.instant, duration=args.duration,
                                        shift=args.shift, ctrl=args.ctrl, alt=args.alt,
                                        meta=args.meta, wait=args.wait, tab_id=args.tab), indent=2))
     elif args.cmd == "mouse-drag":
@@ -446,6 +467,10 @@ def _dispatch(args: argparse.Namespace, d: DumperClient, out_dir: Path) -> None:
         direction = args.cmd.split("-", 1)[1]
         step = args.pixels if args.pixels is not None else (1.0 if args.less else 100.0 if args.more else 10.0)
         print(json.dumps(d.mouse_nudge(direction, step, tab_id=args.tab), indent=2))
+    elif args.cmd == "mouse-scroll":
+        px = args.pixels if args.pixels is not None else (100.0 if args.less else 700.0 if args.more else 300.0)
+        ax, ay = (args.at[0], args.at[1]) if args.at else (None, None)
+        print(json.dumps(d.mouse_scroll(args.direction, pixels=px, x=ax, y=ay, tab_id=args.tab), indent=2))
     elif args.cmd == "mouse-hide":
         print(json.dumps(d.mouse_hide(tab_id=args.tab), indent=2))
     elif args.cmd == "wait":
@@ -565,13 +590,14 @@ _COMMANDS: dict[str, list[str]] = {
     "open": ["--no-wait"],
     "nav": ["--tab", "--no-wait"],
     "click": ["--selector", "--text", "--nth", "--tab", "--no-wait"],
-    "mouse-move": ["--shift", "--ctrl", "--alt", "--meta", "--tab"],
-    "mouse-click": ["--button", "--count", "--double", "--shift", "--ctrl", "--alt", "--meta", "--wait", "--tab"],
+    "mouse-move": ["--instant", "--duration", "--shift", "--ctrl", "--alt", "--meta", "--tab"],
+    "mouse-click": ["--button", "--count", "--double", "--instant", "--duration", "--shift", "--ctrl", "--alt", "--meta", "--wait", "--tab"],
     "mouse-drag": ["--steps", "--button", "--tab"],
     "mouse-up": ["--less", "--more", "--tab"],
     "mouse-down": ["--less", "--more", "--tab"],
     "mouse-left": ["--less", "--more", "--tab"],
     "mouse-right": ["--less", "--more", "--tab"],
+    "mouse-scroll": ["up", "down", "left", "right", "--less", "--more", "--at", "--tab"],
     "mouse-hide": ["--tab"],
     "dump": ["--tab"],
     "screenshot": ["--format", "--quality", "--rect", "--selector", "--text", "--out", "--tab"],

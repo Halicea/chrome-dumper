@@ -57,10 +57,11 @@ to pick which connected browser to act on.
 | `nav <url> [--tab N] [--no-wait]` | navigate an existing tab (active by default) |
 | `close [--tab N | <id>…]` | close active / specific tab(s) |
 | `click [--selector <css> | --text <s>] [--nth N] [--tab N] [--wait]` | click; no target → focused element; `--wait` only if the click navigates |
-| `mouse-move <x> <y> [--tab N]` | move the cursor to viewport coords (CSS px, same space as `screenshot`); real `mousemove` (triggers `:hover`), reports the element under it |
-| `mouse-click <x> <y> [--button left\|right\|middle] [--count N \| --double] [--wait] [--tab N]` | real, trusted click at viewport coords (move → press → release) |
+| `mouse-move <x> <y> [--instant] [--duration MS] [--tab N]` | glide the cursor to viewport coords (CSS px, same space as `screenshot`) along a human-like eased path; reports the element under it; `--instant` jumps |
+| `mouse-click <x> <y> [--button left\|right\|middle] [--count N \| --double] [--instant] [--duration MS] [--wait] [--tab N]` | real, trusted click — glides to the target, then press → release |
 | `mouse-drag <x1> <y1> <x2> <y2> [--steps N] [--button B] [--tab N]` | press at p1, move to p2, release |
 | `mouse-up\|down\|left\|right [N] [--less\|--more] [--tab N]` | nudge the cursor in a direction, relative to its current position; default 10px, `--less` 1px, `--more` 100px, or explicit N |
+| `mouse-scroll [up\|down\|left\|right] [N] [--less\|--more] [--at X Y] [--tab N]` | real wheel scroll via CDP at the cursor; scrolls custom containers/virtualized lists the JS `scroll` can't; default 300px |
 | `mouse-hide [--tab N]` | remove the visible cursor overlay that `mouse-*` draws (a teal ring + click ripple) |
 | `js '<code>' [--tab N]` | run JS in the page via CDP (async; `return` a JSON value), e.g. `js 'return {w: innerWidth, h: innerHeight}'` |
 | `type <value> [--selector|--placeholder|--label] [--no-clear] [--submit] [--wait] [--tab N]` | type into a field; `--submit` presses Enter |

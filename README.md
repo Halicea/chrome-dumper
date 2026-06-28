@@ -88,10 +88,11 @@ The extension dials into the bridge. Clients POST JSON commands to the bridge's 
 | `nav <url> [--tab N] [--no-wait]` | Navigate an existing tab (active by default) |
 | `close [--tab N \| <id>…]` | Close active tab, one id, or many |
 | `click [--selector <css> \| --text <s>] [--nth N] [--tab N] [--wait]` | Click. No target → click currently focused element. `--wait` only if the click navigates. |
-| `mouse-move <x> <y> [--tab N]` | Move the cursor to viewport coords (CSS px, the same space `screenshot` uses). Real, trusted `mousemove` via CDP — triggers `:hover`. Returns the element under the cursor. |
-| `mouse-click <x> <y> [--button left\|right\|middle] [--count N \| --double] [--wait] [--tab N]` | Real, trusted click at viewport coords (move → press → release). |
+| `mouse-move <x> <y> [--instant] [--duration MS] [--tab N]` | Move the cursor to viewport coords (CSS px, the same space `screenshot` uses). **Glides** along a human-like eased path (slows into the target); `--instant` jumps. Real, trusted `mousemove`s via CDP — triggers `:hover`. Returns the element under the cursor. |
+| `mouse-click <x> <y> [--button left\|right\|middle] [--count N \| --double] [--instant] [--duration MS] [--wait] [--tab N]` | Real, trusted click — glides to the target, then press → release. `--instant` to jump. |
 | `mouse-drag <x1> <y1> <x2> <y2> [--steps N] [--button B] [--tab N]` | Press at p1, move to p2 in steps, release. |
 | `mouse-up\|down\|left\|right [N] [--less \| --more] [--tab N]` | Nudge the cursor in a direction, relative to its current position. Default 10px; `--less` 1px, `--more` 100px, or an explicit `N`. |
+| `mouse-scroll [up\|down\|left\|right] [N] [--less \| --more] [--at X Y] [--tab N]` | Real wheel scroll via CDP at the cursor (or `--at X Y`). A trusted wheel event — scrolls custom containers/virtualized lists the JS `scroll` can't. Default 300px; `--less` 100, `--more` 700. |
 | `mouse-hide [--tab N]` | Remove the visible cursor overlay. |
 
 The `mouse-*` commands draw a **visible cursor** (a teal ring) into the page at the synthetic pointer's position — CDP input moves a virtual pointer the browser doesn't render, so this overlay shows where it is; clicks add a red ripple. It clears on navigation/reload, or with `mouse-hide`. The wire protocol accepts `"cursor": false` on any `mouse_*` message to suppress it.
@@ -182,6 +183,7 @@ Every request has an `id`; the matching response echoes it. Requests (server →
 { "id": "...", "type": "mouse_down",  "x": 400, "y": 300, "button": "left" }   // x/y optional → last cursor pos
 { "id": "...", "type": "mouse_up",    "x": 400, "y": 300, "button": "left" }
 { "id": "...", "type": "mouse_drag",  "x1": 100, "y1": 100, "x2": 400, "y2": 300, "steps": 10, "button": "left" }
+{ "id": "...", "type": "mouse_wheel", "deltaY": 300, "x": 400, "y": 300 }   // +deltaY = down; x/y optional → last cursor pos
 { "id": "...", "type": "mouse_hide" }                       // remove the visible cursor overlay
 // any mouse_* accepts "cursor": false to suppress the visible-cursor overlay
 { "id": "...", "type": "zoom",        "percent": 150 }     // or "delta": +10 / -10, "reset": true; omit all → report
@@ -212,6 +214,7 @@ Responses (extension → server):
 { "id": "...", "type": "mouse_moved",   "tabId": 123, "x": 400, "y": 300, "target": { "tag", "id", "cls", "href", "text" } }
 { "id": "...", "type": "mouse_clicked", "tabId": 123, "x": 400, "y": 300, "button": "left", "count": 1, "target": { … } }
 { "id": "...", "type": "mouse_dragged", "tabId": 123, "from": { "x","y" }, "to": { "x","y" }, "button": "left", "steps": 10 }
+{ "id": "...", "type": "mouse_scrolled","tabId": 123, "x": 400, "y": 300, "deltaX": 0, "deltaY": 300 }
 { "id": "...", "type": "zoomed",        "tabId": 123, "percent": 150, "factor": 1.5 }
 { "id": "...", "type": "error",        "error": "..." }
 ```

@@ -122,12 +122,15 @@ class DumperClient:
 
     def mouse_move(self, x: Optional[float] = None, y: Optional[float] = None, *,
                    dx: Optional[float] = None, dy: Optional[float] = None,
+                   smooth: bool = True, duration: Optional[float] = None,
                    shift: bool = False, ctrl: bool = False,
                    alt: bool = False, meta: bool = False, tab_id: Optional[int] = None) -> dict:
         """Move the virtual cursor. Absolute: pass ``x``/``y`` (viewport CSS px,
         as seen in a screenshot). Relative: pass ``dx``/``dy`` to nudge from the
-        last cursor position. Fires a real, trusted mousemove via CDP — triggers
-        :hover. Returns the element currently under the cursor."""
+        last cursor position. Absolute moves glide along a human-like eased path
+        (set ``smooth=False`` for an instant jump; ``duration`` in ms to tune
+        speed). Fires real, trusted mousemoves via CDP — triggers :hover. Returns
+        the element under the cursor."""
         p: dict = {"type": "mouse_move", "shift": shift, "ctrl": ctrl, "alt": alt, "meta": meta}
         if dx is not None or dy is not None:
             p["dx"] = dx or 0
@@ -135,6 +138,22 @@ class DumperClient:
         else:
             p["x"] = x
             p["y"] = y
+        if not smooth: p["smooth"] = False
+        if duration is not None: p["durationMs"] = duration
+        if tab_id is not None: p["tabId"] = tab_id
+        return self._cmd(p, timeout=30.0)
+
+    def mouse_scroll(self, direction: str = "down", *, pixels: float = 300,
+                     x: Optional[float] = None, y: Optional[float] = None,
+                     tab_id: Optional[int] = None) -> dict:
+        """Real wheel scroll via CDP at the cursor (or x,y). Trusted wheel event
+        — scrolls custom containers the JS ``scroll`` can't. ``direction`` is
+        up/down/left/right; ``pixels`` is the wheel delta."""
+        dx = {"left": -pixels, "right": pixels}.get(direction, 0)
+        dy = {"up": -pixels, "down": pixels}.get(direction, 0)
+        p: dict = {"type": "mouse_wheel", "deltaX": dx, "deltaY": dy}
+        if x is not None: p["x"] = x
+        if y is not None: p["y"] = y
         if tab_id is not None: p["tabId"] = tab_id
         return self._cmd(p)
 
@@ -152,15 +171,19 @@ class DumperClient:
         return self.mouse_move(dx=dx, dy=dy, tab_id=tab_id)
 
     def mouse_click(self, x: float, y: float, *, button: str = "left", count: int = 1,
+                    smooth: bool = True, duration: Optional[float] = None,
                     shift: bool = False, ctrl: bool = False, alt: bool = False,
                     meta: bool = False, wait: bool = False, tab_id: Optional[int] = None) -> dict:
-        """Click at viewport coords (CSS px) with a real, trusted gesture
-        (move → press → release). ``button`` is left|right|middle; ``count`` for
+        """Click at viewport coords (CSS px) with a real, trusted gesture: glide
+        to the target (human-like eased path; ``smooth=False`` to jump), then
+        press → release. ``button`` is left|right|middle; ``count`` for
         double/triple click. ``wait`` waits for load if the click navigates."""
         p: dict = {"type": "mouse_click", "x": x, "y": y, "button": button, "count": count,
                    "shift": shift, "ctrl": ctrl, "alt": alt, "meta": meta, "waitForLoad": wait}
+        if not smooth: p["smooth"] = False
+        if duration is not None: p["durationMs"] = duration
         if tab_id is not None: p["tabId"] = tab_id
-        return self._cmd(p)
+        return self._cmd(p, timeout=30.0)
 
     def mouse_down(self, x: Optional[float] = None, y: Optional[float] = None, *,
                    button: str = "left", tab_id: Optional[int] = None) -> dict:

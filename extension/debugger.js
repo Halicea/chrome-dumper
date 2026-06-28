@@ -60,6 +60,48 @@ async function _drawCursor(tabId, x, y, clicked) {
   } catch (e) { /* overlay is cosmetic; ignore failures */ }
 }
 
+function _sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+// Ease-in-out: slow start, faster middle, slow finish — the "decelerate into the
+// target" feel of a real cursor.
+function _easeInOutCubic(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+
+// Glide the cursor from (x0,y0) to (x1,y1) along an eased path with a slight
+// bow (quadratic Bézier), dispatching many mouseMoved events with small delays
+// so it looks like a human hand, not a teleport. Steps/duration scale with
+// distance. Updates the visible cursor as it goes.
+async function _smoothMoveTo(tabId, x0, y0, x1, y1, opts) {
+  opts = opts || {};
+  const dist = Math.hypot(x1 - x0, y1 - y0);
+  if (dist < 2) { // already there
+    await _sendCommand(tabId, "Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: x1, y: y1, button: opts.button || "none", buttons: opts.buttons || 0, modifiers: opts.modifiers || 0,
+    });
+    if (opts.drawCursor !== false) await _drawCursor(tabId, x1, y1, false);
+    return;
+  }
+  const steps = opts.steps != null ? opts.steps : Math.max(10, Math.min(45, Math.round(dist / 11)));
+  const durationMs = opts.durationMs != null ? opts.durationMs : Math.max(140, Math.min(600, dist * 1.15));
+  const stepDelay = durationMs / steps;
+  // Control point bowed perpendicular to the path for a gentle arc.
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  let nx = -(y1 - y0), ny = (x1 - x0);
+  const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
+  const arc = Math.min(36, dist * 0.10);
+  const cx = mx + nx * arc, cy = my + ny * arc;
+  for (let i = 1; i <= steps; i++) {
+    const t = _easeInOutCubic(i / steps);
+    const u = 1 - t;
+    const x = u * u * x0 + 2 * u * t * cx + t * t * x1;
+    const y = u * u * y0 + 2 * u * t * cy + t * t * y1;
+    await _sendCommand(tabId, "Input.dispatchMouseEvent", {
+      type: "mouseMoved", x, y, button: opts.button || "none", buttons: opts.buttons || 0, modifiers: opts.modifiers || 0,
+    });
+    if (opts.drawCursor !== false) await _drawCursor(tabId, x, y, false);
+    if (i < steps) await _sleep(stepDelay);
+  }
+}
+
 // Report what's under (x, y) so the caller can confirm the click landed where it
 // meant to. Uses Runtime.evaluate (no domain enable needed) in the page realm.
 async function _elementAt(tabId, x, y) {
@@ -254,11 +296,19 @@ async function handleDebugCommand(msg, getTargetTab) {
       if (!Number.isFinite(x) || !Number.isFinite(y)) return { type: "error", error: "missing x/y (numbers, viewport CSS px) or dx/dy" };
       try {
         await _attach(tab.id, { network: false }); // idempotent; just need the debugger session
-        await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
-          type: "mouseMoved", x, y, button: "none", buttons: 0, modifiers: _modifiers(msg),
-        });
+        // Smooth, eased glide for absolute moves; relative nudges stay instant.
+        if (!relative && msg.smooth !== false) {
+          await _smoothMoveTo(tab.id, prev.x, prev.y, x, y, {
+            modifiers: _modifiers(msg), drawCursor: msg.cursor !== false,
+            durationMs: msg.durationMs, steps: msg.steps,
+          });
+        } else {
+          await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
+            type: "mouseMoved", x, y, button: "none", buttons: 0, modifiers: _modifiers(msg),
+          });
+          if (msg.cursor !== false) await _drawCursor(tab.id, x, y, false);
+        }
         lastMouse.set(tab.id, { x, y });
-        if (msg.cursor !== false) await _drawCursor(tab.id, x, y, false);
         const target = await _elementAt(tab.id, x, y);
         return { type: "mouse_moved", tabId: tab.id, x, y, target };
       } catch (e) {
@@ -278,12 +328,21 @@ async function handleDebugCommand(msg, getTargetTab) {
       const button = msg.button === "right" || msg.button === "middle" ? msg.button : "left";
       const count = Number.isFinite(Number(msg.count)) && Number(msg.count) >= 1 ? Number(msg.count) : 1;
       const mods = _modifiers(msg);
+      const prev = lastMouse.get(tab.id) || { x, y };
       try {
         await _attach(tab.id, { network: false });
-        await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
-          type: "mouseMoved", x, y, button: "none", buttons: 0, modifiers: mods,
-        });
-        if (msg.cursor !== false) await _drawCursor(tab.id, x, y, false);
+        // Glide to the target like a real cursor, then click.
+        if (msg.smooth !== false) {
+          await _smoothMoveTo(tab.id, prev.x, prev.y, x, y, {
+            modifiers: mods, drawCursor: msg.cursor !== false,
+            durationMs: msg.durationMs, steps: msg.steps,
+          });
+        } else {
+          await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
+            type: "mouseMoved", x, y, button: "none", buttons: 0, modifiers: mods,
+          });
+          if (msg.cursor !== false) await _drawCursor(tab.id, x, y, false);
+        }
         const target = await _elementAt(tab.id, x, y); // capture before the click navigates
         await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
           type: "mousePressed", x, y, button, buttons: _buttonsMask(button), clickCount: count, modifiers: mods,
@@ -322,6 +381,31 @@ async function handleDebugCommand(msg, getTargetTab) {
         return { type: down ? "mouse_pressed" : "mouse_released", tabId: tab.id, x, y, button };
       } catch (e) {
         return { type: "error", error: `mouse_${down ? "down" : "up"}_failed: ${e.message || e}` };
+      }
+    }
+
+    case "mouse_wheel": {
+      // Real, trusted wheel scroll via CDP at the cursor position (or x,y).
+      // Unlike the JS `scroll` command (window.scrollBy), this dispatches a
+      // wheel event the page actually receives — works on custom scroll
+      // containers, virtualized lists, maps, etc.
+      //   { type:"mouse_wheel", tabId?, x?, y?, deltaX?, deltaY? }  // +dy = down
+      const tab = await getTargetTab(msg);
+      if (!tab) return { type: "error", error: "no_tab" };
+      const prev = lastMouse.get(tab.id) || { x: 0, y: 0 };
+      const x = Number.isFinite(Number(msg.x)) ? Number(msg.x) : prev.x;
+      const y = Number.isFinite(Number(msg.y)) ? Number(msg.y) : prev.y;
+      const dx = Number(msg.deltaX || 0), dy = Number(msg.deltaY || 0);
+      try {
+        await _attach(tab.id, { network: false });
+        await _sendCommand(tab.id, "Input.dispatchMouseEvent", {
+          type: "mouseWheel", x, y, deltaX: dx, deltaY: dy, modifiers: _modifiers(msg),
+        });
+        lastMouse.set(tab.id, { x, y });
+        if (msg.cursor !== false) await _drawCursor(tab.id, x, y, false);
+        return { type: "mouse_scrolled", tabId: tab.id, x, y, deltaX: dx, deltaY: dy };
+      } catch (e) {
+        return { type: "error", error: `mouse_wheel_failed: ${e.message || e}` };
       }
     }
 
